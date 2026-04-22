@@ -1,0 +1,20 @@
+# server (JS, bun)
+server/node_modules/
+server/datastore/
+server/identity.key
+
+# server (Go)
+server-go/server-go
+server-go/identity.key
+
+# web
+web/node_modules/
+web/dist/
+
+# editor / os
+.DS_Store
+.vscode/
+.idea/
+
+# logs
+*.log

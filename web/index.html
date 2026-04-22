@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRTC Direct Demo</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="app-header">
+        <div>
+          <h1 id="title">WebRTC Direct Demo</h1>
+          <p class="tagline">browser to go-libp2p host, no signalling</p>
+        </div>
+        <div class="status" id="status" hidden>
+          <span class="dot" id="status-dot"></span>
+          <span class="status-text" id="status-text">idle</span>
+        </div>
+      </header>
+
+      <div id="landing" class="view landing">
+        <section class="hero">
+          <h2>Connects to a server without any permission from a domain registrar or certificate authority.</h2>
+          <ul>
+            <li class="lede">
+              WebRTC is designed for p2p communication. The two ends can be browsers,
+              so it can't require one side to have a domain and signed TLS certificate.
+            </li><li class="lede">
+              However, WebRTC usually requires a signalling server so the two ends can
+              find each other, so it just pushes the need for domain+cert somewhere else.
+            </li><li class="lede">
+              WebRTC Direct solves this. It repurposes WebRTC as a client-server protocol.
+              The server is reachable by its IP address, and the offer answer is predicted
+              instead of actually exchanged - no signaling
+            </li><li class="lede">
+              All communication is still encrypted - you're talking to a key instead of a
+              domain name. The key is pinned using the server's multiaddress.
+            </li>
+          </ul>
+        </section>
+
+        <section class="card">
+          <h3>How the trust works</h3>
+          <ol class="steps">
+            <li>The server generates a fresh self-signed TLS certificate at startup.</li>
+            <li>It encodes the SHA-256 of that certificate into its multiaddr as <code>/certhash/...</code>, alongside its IP, UDP port, and libp2p peer ID.</li>
+            <li>You paste that multiaddr into the browser. The browser now knows the endpoint <em>and</em> the exact certificate fingerprint to expect.</li>
+            <li>The browser dials the IP and UDP port directly. It accepts the DTLS handshake only if the cert hashes to the pinned value. A Noise XX handshake on top then proves the libp2p peer ID.</li>
+          </ol>
+          <p class="lede-sm">
+            No domain. No certificate authority. No signalling relay. If the
+            multiaddr reached you intact, the connection cannot be
+            intercepted.
+          </p>
+        </section>
+
+        <section class="card">
+          <h3>Run a server</h3>
+          <p class="lede-sm">
+            Needs Node.js 22+. Clone this repo, then:
+          </p>
+          <pre><code>cd server
+npm install
+npm start</code></pre>
+          <p class="lede-sm">
+            The server prints one listen multiaddr per reachable network
+            interface. Each looks like:
+          </p>
+          <pre><code>/ip4/192.168.1.50/udp/41108/webrtc-direct/certhash/uEi.../p2p/12D3Koo...</code></pre>
+          <p class="muted">
+            The peer key and the TLS cert are both persisted to disk
+            (<code>identity.key</code> and <code>datastore/</code>), so the
+            certhash and peer ID stay stable across restarts. Pin the UDP
+            port with <code>LISTEN=/ip4/0.0.0.0/udp/41108/webrtc-direct</code>
+            if you want the whole multiaddr to be stable.
+          </p>
+        </section>
+
+        <section class="card">
+          <h3>Pick the right multiaddr</h3>
+          <p class="lede-sm">
+            WebRTC Direct is just UDP underneath. The browser must be able to
+            reach the server's UDP port directly, so pick the address that
+            matches where you are:
+          </p>
+          <ul class="choices">
+            <li><strong>Same machine</strong> as the server — use the <code>127.0.0.1</code> line.</li>
+            <li><strong>Same LAN</strong> — use the line with the LAN IP (<code>192.168.x.x</code>, <code>10.x.x.x</code>).</li>
+            <li><strong>Across the internet</strong> — run the server on a public IP, or forward the UDP port printed in the multiaddr.</li>
+          </ul>
+        </section>
+
+        <div class="cta-row">
+          <button id="try-it" class="primary big">Try it</button>
+        </div>
+      </div>
+
+      <div id="app" class="view" hidden>
+        <section class="card connection-card">
+          <label class="field-label" for="addr">Server multiaddr</label>
+          <input
+            id="addr"
+            class="addr-input"
+            type="text"
+            placeholder="/ip4/.../udp/.../webrtc-direct/certhash/.../p2p/..."
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div class="button-row">
+            <button id="connect" class="primary">Connect</button>
+            <button id="disconnect" class="ghost" disabled>Disconnect</button>
+            <span class="peer-id" id="my-peer"></span>
+          </div>
+        </section>
+
+        <section class="card chat-card">
+          <div class="chat-messages" id="log" aria-live="polite"></div>
+          <form id="compose" class="compose">
+            <input
+              id="msg"
+              type="text"
+              placeholder="connect to start chatting"
+              autocomplete="off"
+              disabled
+            />
+            <button id="send" type="submit" class="primary" disabled>Send</button>
+          </form>
+        </section>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
