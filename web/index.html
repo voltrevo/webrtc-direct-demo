@@ -26,15 +26,21 @@
               WebRTC is designed for p2p communication. The two ends can be browsers,
               so it can't require one side to have a domain and signed TLS certificate.
             </li><li class="lede">
-              However, WebRTC usually requires a signalling server so the two ends can
-              find each other, so it just pushes the need for domain+cert somewhere else.
+              However, WebRTC normally needs a signalling server to relay the SDP
+              offer/answer and ICE candidates between the two ends. That server
+              needs a domain and cert of its own — so the requirement just moves.
             </li><li class="lede">
-              WebRTC Direct solves this. It repurposes WebRTC as a client-server protocol.
-              The server is reachable by its IP address, and the offer answer is predicted
-              instead of actually exchanged - no signaling.
+              WebRTC Direct is a client-server variant. The server listens on an IP
+              and UDP port, and both sides <em>synthesize</em> the SDP from out-of-band
+              info instead of exchanging it: the browser derives the server's answer
+              from the multiaddr, and the server derives the browser's offer from
+              the <code>ufrag</code> it sees in the incoming STUN request. No signalling.
             </li><li class="lede">
-              All communication is still encrypted - you're talking to a key instead of a
-              domain name. The key is pinned using the server's multiaddress.
+              All comms stay end-to-end encrypted. The multiaddr pins two different
+              keys: <code>/certhash/…</code> is the SHA-256 of the server's
+              self-signed TLS cert (verified during DTLS, no CA required), and
+              <code>/p2p/12D3Koo…</code> is the server's libp2p identity, proven via
+              a Noise XX handshake inside the first data channel.
             </li>
           </ul>
         </section>
