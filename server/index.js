@@ -11,9 +11,9 @@ import { fromString, toString } from 'uint8arrays'
 import { readFile, writeFile } from 'node:fs/promises'
 
 const CHAT_PROTO = '/chat/1.0.0'
-const LISTEN = process.env.LISTEN ?? '/ip4/0.0.0.0/udp/0/webrtc-direct'
 const DATASTORE_PATH = process.env.DATASTORE ?? './datastore'
 const IDENTITY_PATH = process.env.IDENTITY ?? './identity.key'
+const PORT_PATH = process.env.PORT_FILE ?? './port'
 
 async function loadOrCreateIdentity(path) {
   try {
@@ -27,19 +27,52 @@ async function loadOrCreateIdentity(path) {
   return key
 }
 
+async function loadSavedPort(path) {
+  try {
+    const raw = (await readFile(path, 'utf8')).trim()
+    const n = Number(raw)
+    if (!Number.isInteger(n) || n < 1 || n > 65535) {
+      throw new Error(`bad port in ${path}: ${JSON.stringify(raw)}`)
+    }
+    return n
+  } catch (err) {
+    if (err.code === 'ENOENT') return null
+    throw err
+  }
+}
+
+function extractUdpPort(ma) {
+  const comp = ma.getComponents().find(c => c.name === 'udp')
+  return comp?.value ? Number(comp.value) : null
+}
+
 const privateKey = await loadOrCreateIdentity(IDENTITY_PATH)
 const datastore = new LevelDatastore(DATASTORE_PATH)
 await datastore.open()
 
+const explicitListen = process.env.LISTEN
+const savedPort = explicitListen ? null : await loadSavedPort(PORT_PATH)
+const listenAddr =
+  explicitListen ??
+  `/ip4/0.0.0.0/udp/${savedPort ?? 0}/webrtc-direct`
+
 const node = await createLibp2p({
   privateKey,
   datastore,
-  addresses: { listen: [LISTEN] },
+  addresses: { listen: [listenAddr] },
   transports: [webRTCDirect({ rtcConfiguration: { iceServers: [] } })],
   services: {
     keychain: keychain()
   }
 })
+
+if (!explicitListen && savedPort == null) {
+  const boundPort = extractUdpPort(node.getMultiaddrs()[0])
+  if (boundPort != null) {
+    await writeFile(PORT_PATH, `${boundPort}\n`)
+    console.log(`saved UDP port ${boundPort} to ${PORT_PATH}; future starts will reuse it`)
+  }
+}
 
 /** @type {Map<string, import('@libp2p/interface').Stream>} */
 const peers = new Map()

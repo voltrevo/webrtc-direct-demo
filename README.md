@@ -27,14 +27,16 @@ npm install          # or: bun install
 npm start            # runs: node index.js
 ```
 
-On first run the server creates `./identity.key` (libp2p peer key) and
-`./datastore/` (keychain for the WebRTC TLS cert). Both are persisted, so the
-full multiaddr is **stable across restarts** — the peer ID and the certhash
-don't change. Only the UDP port is ephemeral unless you pin it:
+On first run the server creates `./identity.key` (libp2p peer key),
+`./datastore/` (keychain holding the WebRTC TLS cert), and `./port`
+(the UDP port it bound). All three are persisted, so the full multiaddr
+is **stable across restarts** — peer ID, certhash, and port all stay the
+same. If the saved port is already in use on a subsequent start, the
+server will fail loudly rather than silently switching to a new one
+(which would break the saved multiaddr).
 
-```sh
-LISTEN=/ip4/0.0.0.0/udp/41108/webrtc-direct bun start
-```
+Override with the `LISTEN` env var if you want to pick a specific port
+yourself or listen on multiple addresses.
 
 Output looks like:
 
@@ -53,9 +55,10 @@ Pick the one the browser can reach:
 ### Env vars
 
 ```
-LISTEN      listen multiaddr         (default: /ip4/0.0.0.0/udp/0/webrtc-direct)
+LISTEN      listen multiaddr  (override; suppresses the saved-port behavior)
 IDENTITY    peer key path            (default: ./identity.key)
 DATASTORE   keychain datastore path  (default: ./datastore)
+PORT_FILE   saved UDP port path      (default: ./port)
 ```
 
 ### Go server (alternative)

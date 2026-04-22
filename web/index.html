@@ -31,7 +31,7 @@
             </li><li class="lede">
               WebRTC Direct solves this. It repurposes WebRTC as a client-server protocol.
               The server is reachable by its IP address, and the offer answer is predicted
-              instead of actually exchanged - no signaling
+              instead of actually exchanged - no signaling.
             </li><li class="lede">
               All communication is still encrypted - you're talking to a key instead of a
               domain name. The key is pinned using the server's multiaddress.
@@ -68,11 +68,13 @@ npm start</code></pre>
           </p>
           <pre><code>/ip4/192.168.1.50/udp/41108/webrtc-direct/certhash/uEi.../p2p/12D3Koo...</code></pre>
           <p class="muted">
-            The peer key and the TLS cert are both persisted to disk
-            (<code>identity.key</code> and <code>datastore/</code>), so the
-            certhash and peer ID stay stable across restarts. Pin the UDP
-            port with <code>LISTEN=/ip4/0.0.0.0/udp/41108/webrtc-direct</code>
-            if you want the whole multiaddr to be stable.
+            On first run the server writes its peer key, TLS cert, and
+            picked UDP port to disk (<code>identity.key</code>,
+            <code>datastore/</code>, <code>port</code>). Every piece of the
+            multiaddr — IP, port, certhash, peer ID — stays the same across
+            restarts. If the saved port is already taken on a later start,
+            the server errors out rather than silently breaking the saved
+            multiaddr.
           </p>
         </section>
 

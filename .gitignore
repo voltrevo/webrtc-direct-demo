@@ -1,7 +1,8 @@
-# server (JS, bun)
+# server (JS)
 server/node_modules/
 server/datastore/
 server/identity.key
+server/port
 
 # server (Go)
 server-go/server-go
