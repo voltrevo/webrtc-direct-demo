@@ -1,8 +1,6 @@
 # server (JS)
 server/node_modules/
-server/datastore/
-server/identity.key
-server/port
+server/state.json
 
 # server (Go)
 server-go/server-go

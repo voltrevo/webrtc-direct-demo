@@ -1,44 +1,69 @@
 import { createLibp2p } from 'libp2p'
 import { webRTCDirect } from '@libp2p/webrtc'
-import { keychain } from '@libp2p/keychain'
 import {
   generateKeyPair,
   privateKeyFromProtobuf,
   privateKeyToProtobuf
 } from '@libp2p/crypto/keys'
-import { LevelDatastore } from 'datastore-level'
+import {
+  BasicConstraintsExtension,
+  X509CertificateGenerator,
+  cryptoProvider
+} from '@peculiar/x509'
+import { Crypto } from '@peculiar/webcrypto'
+import { base64url } from 'multiformats/bases/base64'
+import { sha256 } from 'multiformats/hashes/sha2'
 import { fromString, toString } from 'uint8arrays'
 import { readFile, writeFile } from 'node:fs/promises'
 
-const CHAT_PROTO = '/chat/1.0.0'
-const DATASTORE_PATH = process.env.DATASTORE ?? './datastore'
-const IDENTITY_PATH = process.env.IDENTITY ?? './identity.key'
-const PORT_PATH = process.env.PORT_FILE ?? './port'
+const crypto = new Crypto()
+cryptoProvider.set(crypto)
 
-async function loadOrCreateIdentity(path) {
-  try {
-    const data = await readFile(path)
-    return privateKeyFromProtobuf(new Uint8Array(data))
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err
+const CHAT_PROTO = '/chat/1.0.0'
+const STATE_PATH = process.env.STATE_FILE ?? './state.json'
+const CERT_DAYS = 200 * 365
+const MS_PER_DAY = 86400000
+
+async function generateTlsCertificate(days) {
+  const keyPair = await crypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    true,
+    ['sign', 'verify']
+  )
+  const notBefore = new Date()
+  notBefore.setMilliseconds(0)
+  const notAfter = new Date(notBefore.getTime() + days * MS_PER_DAY)
+  notAfter.setMilliseconds(0)
+  const cert = await X509CertificateGenerator.createSelfSigned({
+    serialNumber: (BigInt(Math.random().toString().replace('.', '')) * 100000n).toString(16),
+    name: 'CN=webrtc-direct-demo, O=demo',
+    notBefore,
+    notAfter,
+    keys: keyPair,
+    extensions: [new BasicConstraintsExtension(false, undefined, true)]
+  })
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keyPair.privateKey))
+  const b64 = Buffer.from(pkcs8).toString('base64').match(/.{1,64}/g).join('\n')
+  const privateKeyPem = `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----`
+  const certhash = base64url.encode((await sha256.digest(new Uint8Array(cert.rawData))).bytes)
+  return {
+    privateKey: privateKeyPem,
+    pem: cert.toString('pem'),
+    certhash
   }
-  const key = await generateKeyPair('Ed25519')
-  await writeFile(path, privateKeyToProtobuf(key), { mode: 0o600 })
-  return key
 }
 
-async function loadSavedPort(path) {
+async function loadState(path) {
   try {
-    const raw = (await readFile(path, 'utf8')).trim()
-    const n = Number(raw)
-    if (!Number.isInteger(n) || n < 1 || n > 65535) {
-      throw new Error(`bad port in ${path}: ${JSON.stringify(raw)}`)
-    }
-    return n
+    return JSON.parse(await readFile(path, 'utf8'))
   } catch (err) {
     if (err.code === 'ENOENT') return null
     throw err
   }
+}
+
+async function saveState(path, state) {
+  await writeFile(path, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 })
 }
 
 function extractUdpPort(ma) {
@@ -46,32 +71,36 @@ function extractUdpPort(ma) {
   return comp?.value ? Number(comp.value) : null
 }
 
-const privateKey = await loadOrCreateIdentity(IDENTITY_PATH)
-const datastore = new LevelDatastore(DATASTORE_PATH)
-await datastore.open()
-
 const explicitListen = process.env.LISTEN
-const savedPort = explicitListen ? null : await loadSavedPort(PORT_PATH)
-const listenAddr =
-  explicitListen ??
-  `/ip4/0.0.0.0/udp/${savedPort ?? 0}/webrtc-direct`
+const existing = explicitListen ? null : await loadState(STATE_PATH)
+
+let privateKey
+let certificate
+if (existing) {
+  privateKey = privateKeyFromProtobuf(fromString(existing.privateKey, 'base64'))
+  certificate = existing.tls
+} else {
+  privateKey = await generateKeyPair('Ed25519')
+  certificate = await generateTlsCertificate(CERT_DAYS)
+}
+
+const listenPort = existing?.port ?? 0
+const listenAddr = explicitListen ?? `/ip4/0.0.0.0/udp/${listenPort}/webrtc-direct`
 
 const node = await createLibp2p({
   privateKey,
-  datastore,
   addresses: { listen: [listenAddr] },
-  transports: [webRTCDirect({ rtcConfiguration: { iceServers: [] } })],
-  services: {
-    keychain: keychain()
-  }
+  transports: [webRTCDirect({ certificate, rtcConfiguration: { iceServers: [] } })]
 })
 
-if (!explicitListen && savedPort == null) {
+if (!explicitListen && existing == null) {
   const boundPort = extractUdpPort(node.getMultiaddrs()[0])
-  if (boundPort != null) {
-    await writeFile(PORT_PATH, `${boundPort}\n`)
-    console.log(`saved UDP port ${boundPort} to ${PORT_PATH}; future starts will reuse it`)
-  }
+  await saveState(STATE_PATH, {
+    privateKey: toString(privateKeyToProtobuf(privateKey), 'base64'),
+    port: boundPort,
+    tls: certificate
+  })
+  console.log(`saved state to ${STATE_PATH}; future starts will reuse this identity, port, and cert`)
 }
 
 /** @type {Map<string, import('@libp2p/interface').Stream>} */
@@ -159,7 +188,6 @@ for (const addr of node.getMultiaddrs()) {
 async function shutdown(signal) {
   console.log(`\nreceived ${signal}, shutting down`)
   try { await node.stop() } catch {}
-  try { await datastore.close() } catch {}
   process.exit(0)
 }
 process.on('SIGINT', () => shutdown('SIGINT'))

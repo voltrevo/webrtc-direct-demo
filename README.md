@@ -27,13 +27,18 @@ npm install          # or: bun install
 npm start            # runs: node index.js
 ```
 
-On first run the server creates `./identity.key` (libp2p peer key),
-`./datastore/` (keychain holding the WebRTC TLS cert), and `./port`
-(the UDP port it bound). All three are persisted, so the full multiaddr
-is **stable across restarts** — peer ID, certhash, and port all stay the
-same. If the saved port is already in use on a subsequent start, the
-server will fail loudly rather than silently switching to a new one
-(which would break the saved multiaddr).
+On first run the server generates:
+
+- a libp2p Ed25519 peer key
+- a self-signed WebRTC TLS cert (200-year lifespan so `certhash` is
+  effectively permanent)
+- a free UDP port
+
+and writes all three into a single file, `./state.json`. Subsequent
+starts load from that file, so the full multiaddr — IP, port, certhash,
+peer ID — stays byte-identical across restarts. If the saved port is
+already in use on a later start, the server fails loudly rather than
+silently picking a new one (which would break the saved multiaddr).
 
 Override with the `LISTEN` env var if you want to pick a specific port
 yourself or listen on multiple addresses.
@@ -55,10 +60,8 @@ Pick the one the browser can reach:
 ### Env vars
 
 ```
-LISTEN      listen multiaddr  (override; suppresses the saved-port behavior)
-IDENTITY    peer key path            (default: ./identity.key)
-DATASTORE   keychain datastore path  (default: ./datastore)
-PORT_FILE   saved UDP port path      (default: ./port)
+LISTEN        listen multiaddr  (override; suppresses state.json port handling)
+STATE_FILE    persisted state path     (default: ./state.json)
 ```
 
 ### Go server (alternative)

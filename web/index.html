@@ -68,13 +68,12 @@ npm start</code></pre>
           </p>
           <pre><code>/ip4/192.168.1.50/udp/41108/webrtc-direct/certhash/uEi.../p2p/12D3Koo...</code></pre>
           <p class="muted">
-            On first run the server writes its peer key, TLS cert, and
-            picked UDP port to disk (<code>identity.key</code>,
-            <code>datastore/</code>, <code>port</code>). Every piece of the
-            multiaddr — IP, port, certhash, peer ID — stays the same across
-            restarts. If the saved port is already taken on a later start,
-            the server errors out rather than silently breaking the saved
-            multiaddr.
+            On first run the server writes its peer key, TLS cert
+            (200-year lifespan), and picked UDP port into
+            <code>state.json</code>. Every piece of the multiaddr — IP,
+            port, certhash, peer ID — stays identical across restarts. If
+            the saved port is already taken on a later start, the server
+            errors out rather than silently breaking the saved multiaddr.
           </p>
         </section>
 
