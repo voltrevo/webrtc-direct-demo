@@ -7,11 +7,11 @@
   --border: #e4e7ef;
   --text: #0f172a;
   --text-muted: #64748b;
-  --accent: #2f6feb;
-  --accent-fg: #ffffff;
-  --accent-weak: #dbe6fc;
-  --me-bg: #2f6feb;
-  --me-fg: #ffffff;
+  --accent: #84cc16;
+  --accent-fg: #1a2e05;
+  --accent-weak: #ecfccb;
+  --me-bg: #84cc16;
+  --me-fg: #1a2e05;
   --peer-bg: #eef0f6;
   --peer-fg: #0f172a;
   --ok: #16a34a;
@@ -30,11 +30,11 @@
     --border: #1f2a44;
     --text: #e6e9f2;
     --text-muted: #8893ab;
-    --accent: #6aa3ff;
-    --accent-fg: #0a0f1e;
-    --accent-weak: #1a2747;
-    --me-bg: #3b6fe0;
-    --me-fg: #f4f7ff;
+    --accent: #a3e635;
+    --accent-fg: #14210a;
+    --accent-weak: #1f3d0a;
+    --me-bg: #a3e635;
+    --me-fg: #14210a;
     --peer-bg: #1a2340;
     --peer-fg: #e6e9f2;
     --ok: #4ade80;
@@ -60,6 +60,7 @@ body {
     var(--accent-weak),
     transparent 60%
   );
+  background-repeat: no-repeat;
   min-height: 100%;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -408,7 +409,7 @@ button.big {
   font-size: 1.05rem;
   padding: 0.75rem 1.6rem;
   border-radius: 10px;
-  box-shadow: 0 6px 18px rgba(47, 111, 235, 0.25);
+  box-shadow: 0 6px 18px rgba(132, 204, 22, 0.35);
 }
 
 @media (max-width: 520px) {
