@@ -6,7 +6,17 @@ import { multiaddr } from '@multiformats/multiaddr'
 import { fromString, toString } from 'uint8arrays'
 
 const CHAT_PROTO = '/chat/1.0.0'
+const RPC_PROTO = '/eth-rpc/1.0.0'
 const BULLETIN = '__bulletin__'
+const RPC_TIMEOUT_MS = 20_000
+
+const NETWORKS = [
+  { key: 'ethereum', name: 'Ethereum', chainId: 1 },
+  { key: 'base',     name: 'Base',     chainId: 8453 },
+  { key: 'arbitrum', name: 'Arbitrum', chainId: 42161 },
+  { key: 'optimism', name: 'Optimism', chainId: 10 },
+  { key: 'polygon',  name: 'Polygon',  chainId: 137 }
+]
 
 const $ = (id) => document.getElementById(id)
 const nameInput = $('display-name')
@@ -23,6 +33,16 @@ const msgInput = $('msg')
 const sendBtn = $('send')
 const composeForm = $('compose')
 const chatCardEl = $('chat-card')
+const tabMessagesEl = $('tab-messages')
+const tabExplorerEl = $('tab-explorer')
+const chatPanelEl = $('chat-panel')
+const explorerPanelEl = $('explorer-panel')
+const explorerTitleEl = $('explorer-title')
+const explorerSubEl = $('explorer-sub')
+const explorerBodyEl = $('explorer-body')
+const explorerSearchForm = $('explorer-search')
+const explorerQueryInput = $('explorer-query')
+const explorerRefreshBtn = $('explorer-refresh')
 const landingView = $('landing')
 const appView = $('app')
 const tryItBtn = $('try-it')
@@ -33,6 +53,12 @@ let stream = null
 let readBuf = ''
 let myPeerId = null
 let myName = ''
+
+let rpcStream = null
+let rpcBuf = ''
+let nextRpcId = 1
+/** @type {Map<number, { resolve: (v: any) => void, reject: (e: Error) => void, timer: ReturnType<typeof setTimeout> }>} */
+const pendingRpc = new Map()
 
 let identityKey = null
 let dmKeyPair = null
@@ -59,6 +85,7 @@ const roster = new Map()
 const conversations = new Map()
 
 let selectedConvo = BULLETIN
+let activeTab = 'messages'
 let nextOutgoingId = 1
 
 const ADJECTIVES = ['quiet', 'bold', 'clever', 'noble', 'wild', 'swift', 'shy', 'merry', 'bright', 'grumpy', 'keen', 'vivid', 'sleek', 'dusty', 'bouncy', 'crispy', 'gentle', 'fierce', 'tipsy', 'fancy', 'sneaky', 'cozy', 'sturdy', 'breezy', 'tiny', 'jolly', 'spry', 'mellow', 'zesty', 'plucky', 'hazy', 'nimble']
@@ -110,6 +137,11 @@ function setConnected(connected) {
   nameInput.disabled = connected
   chatCardEl.hidden = !connected
   if (!connected) {
+    activeTab = 'messages'
+    tabMessagesEl.classList.add('active')
+    tabExplorerEl.classList.remove('active')
+    chatPanelEl.hidden = false
+    explorerPanelEl.hidden = true
     selectedConvo = BULLETIN
     msgInput.disabled = true
     sendBtn.disabled = true
@@ -173,41 +205,115 @@ async function decryptFrom(peerId, ivB64, ciphertextB64) {
   return new TextDecoder().decode(plain)
 }
 
+// ------- rpc -------
+
+async function openRpcStream(ma) {
+  rpcStream = await node.dialProtocol(ma, RPC_PROTO, {
+    signal: AbortSignal.timeout(15_000)
+  })
+  rpcBuf = ''
+  rpcStream.addEventListener('message', (event) => {
+    rpcBuf += toString(event.data.subarray ? event.data.subarray() : event.data)
+    let idx
+    while ((idx = rpcBuf.indexOf('\n')) !== -1) {
+      const line = rpcBuf.slice(0, idx)
+      rpcBuf = rpcBuf.slice(idx + 1)
+      if (!line) continue
+      let resp
+      try { resp = JSON.parse(line) } catch { continue }
+      const pending = pendingRpc.get(resp.id)
+      if (!pending) continue
+      pendingRpc.delete(resp.id)
+      clearTimeout(pending.timer)
+      if (resp.error) pending.reject(new Error(resp.error.message || 'rpc error'))
+      else pending.resolve(resp.result)
+    }
+  })
+  rpcStream.addEventListener('close', () => {
+    for (const p of pendingRpc.values()) {
+      clearTimeout(p.timer)
+      p.reject(new Error('rpc stream closed'))
+    }
+    pendingRpc.clear()
+    rpcStream = null
+  })
+}
+
+async function rpc(network, method, params = []) {
+  if (!rpcStream) throw new Error('rpc not connected')
+  const id = nextRpcId++
+  const envelope = { network, req: { jsonrpc: '2.0', id, method, params } }
+  const bytes = fromString(JSON.stringify(envelope) + '\n')
+  if (!rpcStream.send(bytes)) await rpcStream.onDrain()
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (pendingRpc.has(id)) {
+        pendingRpc.delete(id)
+        reject(new Error(`rpc timeout: ${method} on ${network}`))
+      }
+    }, RPC_TIMEOUT_MS)
+    pendingRpc.set(id, { resolve, reject, timer })
+  })
+}
+
 // ------- UI -------
 
-function convoListEntries() {
-  const entries = [{ key: BULLETIN, label: 'bulletin', sub: 'public · not encrypted', kind: 'bulletin' }]
-  const others = [...roster.values()]
-    .filter(p => p.peerId !== myPeerId)
-    .sort((a, b) => a.name.localeCompare(b.name))
-  for (const p of others) {
-    entries.push({
-      key: p.peerId,
-      label: p.name,
-      sub: shortId(p.peerId),
-      kind: 'dm'
-    })
-  }
-  return entries
+function renderSelfChip() {
+  if (!myPeerId) return
+  const me = document.createElement('div')
+  me.className = 'sidebar-self'
+  const name = document.createElement('div')
+  name.className = 'name'
+  name.textContent = myName || 'you'
+  const sub = document.createElement('div')
+  sub.className = 'sub'
+  sub.textContent = shortId(myPeerId)
+  me.appendChild(name)
+  me.appendChild(sub)
+  rosterEl.appendChild(me)
 }
 
 function renderRoster() {
   rosterEl.innerHTML = ''
-  if (myPeerId) {
-    const me = document.createElement('div')
-    me.className = 'sidebar-self'
-    const name = document.createElement('div')
-    name.className = 'name'
-    name.textContent = myName || 'you'
-    const sub = document.createElement('div')
-    sub.className = 'sub'
-    sub.textContent = shortId(myPeerId)
-    me.appendChild(name)
-    me.appendChild(sub)
-    rosterEl.appendChild(me)
+  if (activeTab === 'explorer') {
+    renderExplorerSidebar()
+  } else {
+    renderMessagesSidebar()
   }
+}
 
-  const entries = convoListEntries()
+function renderExplorerSidebar() {
+  renderSelfChip()
+  for (const n of NETWORKS) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = `convo-item network${n.key === explorerNetwork ? ' active' : ''}`
+    btn.dataset.key = n.key
+    const text = document.createElement('div')
+    text.className = 'convo-text'
+    const nameEl = document.createElement('div')
+    nameEl.className = 'name'
+    nameEl.textContent = n.name
+    text.appendChild(nameEl)
+    const subEl = document.createElement('div')
+    subEl.className = 'sub'
+    subEl.textContent = `chain ${n.chainId}`
+    text.appendChild(subEl)
+    btn.appendChild(text)
+    btn.addEventListener('click', () => openExplorer(n.key))
+    rosterEl.appendChild(btn)
+  }
+}
+
+function renderMessagesSidebar() {
+  renderSelfChip()
+  const entries = [
+    { key: BULLETIN, label: 'bulletin', sub: 'public · not encrypted', kind: 'bulletin' },
+    ...[...roster.values()]
+      .filter(p => p.peerId !== myPeerId)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(p => ({ key: p.peerId, label: p.name, sub: shortId(p.peerId), kind: 'dm' }))
+  ]
   for (const e of entries) {
     const btn = document.createElement('button')
     btn.type = 'button'
@@ -242,6 +348,24 @@ function renderRoster() {
     hint.className = 'sidebar-hint'
     hint.textContent = 'no other peers yet — wait for someone else to connect'
     rosterEl.appendChild(hint)
+  }
+}
+
+function setActiveTab(tab) {
+  if (tab !== 'messages' && tab !== 'explorer') return
+  activeTab = tab
+  tabMessagesEl.classList.toggle('active', tab === 'messages')
+  tabExplorerEl.classList.toggle('active', tab === 'explorer')
+  if (tab === 'messages') {
+    chatPanelEl.hidden = false
+    explorerPanelEl.hidden = true
+    renderRoster()
+    renderLog()
+  } else {
+    chatPanelEl.hidden = true
+    explorerPanelEl.hidden = false
+    renderRoster()
+    openExplorer(explorerNetwork ?? NETWORKS[0].key)
   }
 }
 
@@ -304,6 +428,346 @@ function appendToOpenLog(m) {
   appendMessageEl(m)
   logEl.scrollTop = logEl.scrollHeight
 }
+
+// ------- block explorer -------
+
+let explorerNetwork = null
+/** @type {null | { kind: 'overview' } | { kind: 'block', number: number } | { kind: 'tx', hash: string } | { kind: 'address', addr: string }} */
+let explorerView = null
+
+function networkMeta(key) {
+  return NETWORKS.find(n => n.key === key)
+}
+
+function hexToInt(hex) {
+  if (typeof hex !== 'string' || !hex.startsWith('0x')) return 0
+  return Number.parseInt(hex, 16)
+}
+
+function formatTimeAgo(secUnix) {
+  const diff = Math.floor(Date.now() / 1000) - secUnix
+  if (diff < 0) return 'just now'
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return `${Math.floor(diff / 86400)}d ago`
+}
+
+function shortHex(s, keepStart = 8, keepEnd = 6) {
+  if (typeof s !== 'string' || s.length <= keepStart + keepEnd + 1) return s
+  return `${s.slice(0, keepStart)}…${s.slice(-keepEnd)}`
+}
+
+function setExplorerBody(...nodes) {
+  explorerBodyEl.innerHTML = ''
+  for (const n of nodes) explorerBodyEl.appendChild(n)
+}
+
+function explorerLoading(text = 'loading…') {
+  const el = document.createElement('div')
+  el.className = 'explorer-loading'
+  el.textContent = text
+  return el
+}
+
+function explorerError(text) {
+  const el = document.createElement('div')
+  el.className = 'explorer-error'
+  el.textContent = text
+  return el
+}
+
+async function openExplorer(network) {
+  explorerNetwork = network
+  const meta = networkMeta(network)
+  explorerTitleEl.textContent = meta?.name ?? network
+  explorerSubEl.textContent = meta ? `chain ${meta.chainId}` : ''
+  explorerQueryInput.value = ''
+  if (activeTab === 'explorer') renderRoster()
+  await refreshExplorerOverview()
+}
+
+async function refreshExplorerOverview() {
+  const network = explorerNetwork
+  if (!network) return
+  explorerView = { kind: 'overview' }
+  setExplorerBody(explorerLoading('loading latest blocks…'))
+  let latestHex
+  try {
+    latestHex = await rpc(network, 'eth_blockNumber')
+  } catch (err) {
+    setExplorerBody(explorerError(`rpc error: ${err.message}`))
+    return
+  }
+  const latest = hexToInt(latestHex)
+  const blockCount = 10
+  const reqs = []
+  for (let i = 0; i < blockCount; i++) {
+    const n = latest - i
+    if (n < 0) break
+    reqs.push(
+      rpc(network, 'eth_getBlockByNumber', ['0x' + n.toString(16), false])
+        .catch(err => ({ __err: err.message, number: '0x' + n.toString(16) }))
+    )
+  }
+  const blocks = await Promise.all(reqs)
+  if (explorerNetwork !== network || activeTab !== 'explorer') return
+  renderExplorerOverview(latest, blocks)
+}
+
+function renderExplorerOverview(latest, blocks) {
+  const frag = document.createDocumentFragment()
+
+  const stats = document.createElement('div')
+  stats.className = 'explorer-stats'
+  const stat1 = document.createElement('div')
+  stat1.className = 'explorer-stat'
+  stat1.innerHTML = `<div class="stat-label">latest block</div><div class="stat-value">${latest.toLocaleString()}</div>`
+  stats.appendChild(stat1)
+  frag.appendChild(stats)
+
+  const h = document.createElement('h4')
+  h.className = 'explorer-section-title'
+  h.textContent = 'recent blocks'
+  frag.appendChild(h)
+
+  const list = document.createElement('div')
+  list.className = 'explorer-list'
+  for (const b of blocks) {
+    const row = document.createElement('button')
+    row.type = 'button'
+    row.className = 'explorer-row'
+    if (b.__err) {
+      row.textContent = `#${hexToInt(b.number).toLocaleString()} · error: ${b.__err}`
+      row.disabled = true
+    } else {
+      const n = hexToInt(b.number)
+      const ts = hexToInt(b.timestamp)
+      const txs = Array.isArray(b.transactions) ? b.transactions.length : 0
+      row.innerHTML = `
+        <div class="row-primary">
+          <span class="row-num">#${n.toLocaleString()}</span>
+          <span class="row-hash">${shortHex(b.hash)}</span>
+        </div>
+        <div class="row-secondary">
+          <span>${txs} tx</span>
+          <span>${formatTimeAgo(ts)}</span>
+        </div>
+      `
+      row.addEventListener('click', () => openBlock(n))
+    }
+    list.appendChild(row)
+  }
+  frag.appendChild(list)
+
+  setExplorerBody(frag)
+}
+
+async function openBlock(number) {
+  const network = explorerNetwork
+  if (!network) return
+  explorerView = { kind: 'block', number }
+  setExplorerBody(explorerLoading(`loading block #${number.toLocaleString()}…`))
+  let block
+  try {
+    block = await rpc(network, 'eth_getBlockByNumber', ['0x' + number.toString(16), true])
+  } catch (err) {
+    setExplorerBody(explorerError(`rpc error: ${err.message}`))
+    return
+  }
+  if (!block) {
+    setExplorerBody(explorerError('block not found'))
+    return
+  }
+  renderBlockDetail(block)
+}
+
+function renderBlockDetail(block) {
+  const frag = document.createDocumentFragment()
+  const back = document.createElement('button')
+  back.type = 'button'
+  back.className = 'ghost explorer-back'
+  back.textContent = '← back'
+  back.addEventListener('click', () => openExplorer(explorerNetwork))
+  frag.appendChild(back)
+
+  const n = hexToInt(block.number)
+  const ts = hexToInt(block.timestamp)
+  const gasUsed = hexToInt(block.gasUsed)
+  const gasLimit = hexToInt(block.gasLimit)
+  const txs = Array.isArray(block.transactions) ? block.transactions : []
+
+  const summary = document.createElement('div')
+  summary.className = 'detail-card'
+  summary.innerHTML = `
+    <h3>Block #${n.toLocaleString()}</h3>
+    <dl class="kv">
+      <dt>hash</dt><dd class="mono">${block.hash}</dd>
+      <dt>parent</dt><dd class="mono">${block.parentHash}</dd>
+      <dt>miner</dt><dd class="mono">${block.miner || '—'}</dd>
+      <dt>timestamp</dt><dd>${new Date(ts * 1000).toISOString()} (${formatTimeAgo(ts)})</dd>
+      <dt>gas</dt><dd>${gasUsed.toLocaleString()} / ${gasLimit.toLocaleString()}</dd>
+      <dt>transactions</dt><dd>${txs.length}</dd>
+    </dl>
+  `
+  frag.appendChild(summary)
+
+  if (txs.length > 0) {
+    const h = document.createElement('h4')
+    h.className = 'explorer-section-title'
+    h.textContent = 'transactions'
+    frag.appendChild(h)
+    const list = document.createElement('div')
+    list.className = 'explorer-list'
+    for (const tx of txs) {
+      const row = document.createElement('button')
+      row.type = 'button'
+      row.className = 'explorer-row'
+      const valueWei = BigInt(tx.value || '0x0')
+      const valueEth = Number(valueWei) / 1e18
+      row.innerHTML = `
+        <div class="row-primary">
+          <span class="row-hash">${shortHex(tx.hash)}</span>
+          <span class="row-value">${valueEth.toLocaleString(undefined, { maximumSignificantDigits: 4 })} Ξ</span>
+        </div>
+        <div class="row-secondary">
+          <span class="mono">${shortHex(tx.from)}</span>
+          <span>→</span>
+          <span class="mono">${tx.to ? shortHex(tx.to) : '(contract creation)'}</span>
+        </div>
+      `
+      row.addEventListener('click', () => openTx(tx.hash))
+      list.appendChild(row)
+    }
+    frag.appendChild(list)
+  }
+
+  setExplorerBody(frag)
+}
+
+async function openTx(hash) {
+  const network = explorerNetwork
+  if (!network) return
+  explorerView = { kind: 'tx', hash }
+  setExplorerBody(explorerLoading(`loading tx ${shortHex(hash)}…`))
+  let tx, receipt
+  try {
+    [tx, receipt] = await Promise.all([
+      rpc(network, 'eth_getTransactionByHash', [hash]),
+      rpc(network, 'eth_getTransactionReceipt', [hash])
+    ])
+  } catch (err) {
+    setExplorerBody(explorerError(`rpc error: ${err.message}`))
+    return
+  }
+  if (!tx) {
+    setExplorerBody(explorerError('transaction not found'))
+    return
+  }
+  renderTxDetail(tx, receipt)
+}
+
+function renderTxDetail(tx, receipt) {
+  const frag = document.createDocumentFragment()
+  const back = document.createElement('button')
+  back.type = 'button'
+  back.className = 'ghost explorer-back'
+  back.textContent = '← back'
+  back.addEventListener('click', () => {
+    if (tx.blockNumber) openBlock(hexToInt(tx.blockNumber))
+    else openExplorer(explorerNetwork)
+  })
+  frag.appendChild(back)
+
+  const valueWei = BigInt(tx.value || '0x0')
+  const valueEth = Number(valueWei) / 1e18
+  const gas = hexToInt(tx.gas)
+  const status = receipt ? (receipt.status === '0x1' ? 'success' : 'failed') : 'pending'
+
+  const card = document.createElement('div')
+  card.className = 'detail-card'
+  card.innerHTML = `
+    <h3>Transaction</h3>
+    <dl class="kv">
+      <dt>hash</dt><dd class="mono">${tx.hash}</dd>
+      <dt>status</dt><dd>${status}</dd>
+      <dt>block</dt><dd>${tx.blockNumber ? '#' + hexToInt(tx.blockNumber).toLocaleString() : '(pending)'}</dd>
+      <dt>from</dt><dd class="mono">${tx.from}</dd>
+      <dt>to</dt><dd class="mono">${tx.to ?? '(contract creation)'}</dd>
+      <dt>value</dt><dd>${valueEth.toLocaleString(undefined, { maximumSignificantDigits: 6 })} Ξ</dd>
+      <dt>gas limit</dt><dd>${gas.toLocaleString()}</dd>
+      ${receipt ? `<dt>gas used</dt><dd>${hexToInt(receipt.gasUsed).toLocaleString()}</dd>` : ''}
+      <dt>nonce</dt><dd>${hexToInt(tx.nonce)}</dd>
+      ${tx.input && tx.input !== '0x' ? `<dt>input</dt><dd class="mono wrap">${tx.input.length > 260 ? tx.input.slice(0, 260) + '…' : tx.input}</dd>` : ''}
+    </dl>
+  `
+  frag.appendChild(card)
+  setExplorerBody(frag)
+}
+
+async function openAddress(addr) {
+  const network = explorerNetwork
+  if (!network) return
+  explorerView = { kind: 'address', addr }
+  setExplorerBody(explorerLoading(`loading ${shortHex(addr)}…`))
+  let balance, code, nonce
+  try {
+    [balance, code, nonce] = await Promise.all([
+      rpc(network, 'eth_getBalance', [addr, 'latest']),
+      rpc(network, 'eth_getCode', [addr, 'latest']),
+      rpc(network, 'eth_getTransactionCount', [addr, 'latest'])
+    ])
+  } catch (err) {
+    setExplorerBody(explorerError(`rpc error: ${err.message}`))
+    return
+  }
+  const frag = document.createDocumentFragment()
+  const back = document.createElement('button')
+  back.type = 'button'
+  back.className = 'ghost explorer-back'
+  back.textContent = '← back'
+  back.addEventListener('click', () => openExplorer(explorerNetwork))
+  frag.appendChild(back)
+  const weiBig = BigInt(balance || '0x0')
+  const eth = Number(weiBig) / 1e18
+  const isContract = typeof code === 'string' && code !== '0x'
+  const card = document.createElement('div')
+  card.className = 'detail-card'
+  card.innerHTML = `
+    <h3>Address</h3>
+    <dl class="kv">
+      <dt>address</dt><dd class="mono">${addr}</dd>
+      <dt>type</dt><dd>${isContract ? 'contract' : 'EOA'}</dd>
+      <dt>balance</dt><dd>${eth.toLocaleString(undefined, { maximumSignificantDigits: 6 })} Ξ</dd>
+      <dt>tx count</dt><dd>${hexToInt(nonce).toLocaleString()}</dd>
+      ${isContract ? `<dt>code size</dt><dd>${((code.length - 2) / 2).toLocaleString()} bytes</dd>` : ''}
+    </dl>
+  `
+  frag.appendChild(card)
+  setExplorerBody(frag)
+}
+
+explorerRefreshBtn.addEventListener('click', () => {
+  if (!explorerNetwork || !explorerView) return
+  const v = explorerView
+  let p
+  if (v.kind === 'block') p = openBlock(v.number)
+  else if (v.kind === 'tx') p = openTx(v.hash)
+  else if (v.kind === 'address') p = openAddress(v.addr)
+  else p = refreshExplorerOverview()
+  p.catch((err) => console.warn(`refresh: ${err.message}`))
+})
+
+explorerSearchForm.addEventListener('submit', (e) => {
+  e.preventDefault()
+  const q = explorerQueryInput.value.trim()
+  if (!q) return
+  if (/^0x[0-9a-fA-F]{64}$/.test(q)) return openTx(q)
+  if (/^0x[0-9a-fA-F]{40}$/.test(q)) return openAddress(q)
+  if (/^\d+$/.test(q)) return openBlock(parseInt(q, 10))
+  if (/^0x[0-9a-fA-F]+$/.test(q) && q.length === 66) return openTx(q)
+  setExplorerBody(explorerError(`couldn't parse "${q}" — expected block #, 0x-tx hash, or 0x-address`))
+})
 
 function selectConvo(key) {
   selectedConvo = key
@@ -469,12 +933,14 @@ async function connect() {
       cleanup()
     })
 
+    await openRpcStream(ma).catch((err) => {
+      console.warn(`rpc stream failed to open: ${err.message}`)
+    })
+
     const remotePeer = ma.getComponents().find(c => c.name === 'p2p')?.value
     setStatus('ok', `connected · ${shortId(remotePeer ?? '')}`)
     setConnected(true)
-    selectedConvo = BULLETIN
-    renderRoster()
-    renderLog()
+    setActiveTab('messages')
     selectConvo(BULLETIN)
 
     await sendServer({
@@ -495,6 +961,15 @@ async function disconnect() {
 }
 
 async function cleanup() {
+  explorerNetwork = null
+  explorerView = null
+  for (const p of pendingRpc.values()) {
+    clearTimeout(p.timer)
+    p.reject(new Error('disconnected'))
+  }
+  pendingRpc.clear()
+  if (rpcStream) { try { await rpcStream.close() } catch {} rpcStream = null }
+  rpcBuf = ''
   if (stream) { try { await stream.close() } catch {} stream = null }
   if (node) { try { await node.stop() } catch {} node = null }
   roster.clear()
@@ -567,6 +1042,9 @@ async function showLanding() {
   titleEl.classList.remove('clickable')
   setStatus('', 'idle')
 }
+
+tabMessagesEl.addEventListener('click', () => setActiveTab('messages'))
+tabExplorerEl.addEventListener('click', () => setActiveTab('explorer'))
 
 tryItBtn.addEventListener('click', showApp)
 titleEl.addEventListener('click', () => {

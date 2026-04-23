@@ -46,6 +46,30 @@
         </section>
 
         <section class="card">
+          <h3>What runs on top</h3>
+          <p class="lede-sm">
+            The transport is the point; this demo bolts two example services
+            onto it, both speaking libp2p stream protocols.
+          </p>
+          <ul class="choices">
+            <li>
+              <strong>Chat</strong> (<code>/chat/1.0.0</code>) — a public
+              bulletin plus end-to-end encrypted direct messages. Each
+              client's DM key is signed by their libp2p identity, so the
+              server can route messages but can't read or forge DMs.
+            </li>
+            <li>
+              <strong>Block explorer</strong> (<code>/eth-rpc/1.0.0</code>) — the
+              server proxies JSON-RPC calls to curated public endpoints for
+              Ethereum, Arbitrum, Optimism, Base, and Polygon; the browser
+              renders a small live explorer from the responses. The server
+              sees your queries; the public RPC endpoints only see the
+              server's IP.
+            </li>
+          </ul>
+        </section>
+
+        <section class="card">
           <h3>How the trust works</h3>
           <ol class="steps">
             <li>The server generates a fresh self-signed TLS certificate at startup.</li>
@@ -129,19 +153,43 @@ npm start</code></pre>
         </section>
 
         <section class="card chat-card" id="chat-card" hidden>
+          <div class="tab-strip" role="tablist">
+            <button type="button" class="tab active" data-tab="messages" id="tab-messages" role="tab">Messages</button>
+            <button type="button" class="tab" data-tab="explorer" id="tab-explorer" role="tab">Explorer</button>
+          </div>
+          <div class="chat-body">
           <aside class="sidebar" id="roster" aria-label="Conversations"></aside>
           <div class="chat-main">
-            <div class="chat-messages" id="log" aria-live="polite"></div>
-            <form id="compose" class="compose">
-              <input
-                id="msg"
-                type="text"
-                placeholder="connect to start chatting"
-                autocomplete="off"
-                disabled
-              />
-              <button id="send" type="submit" class="primary" disabled>Send</button>
-            </form>
+            <div class="chat-panel" id="chat-panel">
+              <div class="chat-messages" id="log" aria-live="polite"></div>
+              <form id="compose" class="compose">
+                <input
+                  id="msg"
+                  type="text"
+                  placeholder="connect to start chatting"
+                  autocomplete="off"
+                  disabled
+                />
+                <button id="send" type="submit" class="primary" disabled>Send</button>
+              </form>
+            </div>
+            <div class="explorer-panel" id="explorer-panel" hidden>
+              <div class="explorer-header">
+                <div>
+                  <div class="explorer-title" id="explorer-title">—</div>
+                  <div class="explorer-sub" id="explorer-sub"></div>
+                </div>
+                <div class="explorer-controls">
+                  <button type="button" id="explorer-refresh" class="ghost">Refresh</button>
+                  <form id="explorer-search" class="explorer-search">
+                    <input id="explorer-query" type="text" placeholder="block # · 0x tx hash · 0x address" autocomplete="off" spellcheck="false" />
+                    <button type="submit" class="ghost">Search</button>
+                  </form>
+                </div>
+              </div>
+              <div class="explorer-body" id="explorer-body"></div>
+            </div>
+          </div>
           </div>
         </section>
       </div>

@@ -20,9 +20,94 @@ const crypto = new Crypto()
 cryptoProvider.set(crypto)
 
 const CHAT_PROTO = '/chat/1.0.0'
+const RPC_PROTO = '/eth-rpc/1.0.0'
+const RPC_MAX_BUF = 1 << 20 // 1 MB per stream direction
+const RPC_UPSTREAM_TIMEOUT_MS = 3_000
 const STATE_PATH = process.env.STATE_FILE ?? './state.json'
 const CERT_DAYS = 200 * 365
 const MS_PER_DAY = 86400000
+
+// Curated free public JSON-RPC endpoints, mirrored from
+// https://github.com/voltrevo/keynet/blob/main/src/meta-rpc-server.ts
+const RPC_UPSTREAMS = {
+  ethereum: [
+    'https://ethereum-rpc.publicnode.com',
+    'https://eth.drpc.org',
+    'https://ethereum.publicnode.com',
+    'https://endpoints.omniatech.io/v1/eth/mainnet/public',
+    'https://1rpc.io/eth'
+  ],
+  arbitrum: [
+    'https://arb1.arbitrum.io/rpc',
+    'https://arbitrum.drpc.org',
+    'https://arbitrum-one.public.blastapi.io',
+    'https://arbitrum.meowrpc.com',
+    'https://arbitrum.public.blockpi.network/v1/rpc/public'
+  ],
+  optimism: [
+    'https://optimism.public.blockpi.network/v1/rpc/public',
+    'https://api.zan.top/opt-mainnet',
+    'https://optimism-public.nodies.app',
+    'https://optimism-rpc.publicnode.com',
+    'https://1rpc.io/op'
+  ],
+  base: [
+    'https://1rpc.io/base',
+    'https://mainnet.base.org',
+    'https://developer-access-mainnet.base.org',
+    'https://base-public.nodies.app',
+    'https://base.public.blockpi.network/v1/rpc/public'
+  ],
+  polygon: [
+    'https://1rpc.io/matic',
+    'https://polygon.drpc.org',
+    'https://polygon-public.nodies.app',
+    'https://api.zan.top/polygon-mainnet',
+    'https://polygon-bor-rpc.publicnode.com'
+  ]
+}
+
+const CHAIN_ID_TO_NETWORK = { '1': 'ethereum', '42161': 'arbitrum', '10': 'optimism', '8453': 'base', '137': 'polygon' }
+const NETWORK_ALIASES = { eth: 'ethereum', arb: 'arbitrum', op: 'optimism', poly: 'polygon', matic: 'polygon' }
+
+function resolveNetwork(input) {
+  const lower = String(input ?? '').toLowerCase()
+  if (Object.prototype.hasOwnProperty.call(RPC_UPSTREAMS, lower)) return lower
+  if (Object.prototype.hasOwnProperty.call(NETWORK_ALIASES, lower)) return NETWORK_ALIASES[lower]
+  if (Object.prototype.hasOwnProperty.call(CHAIN_ID_TO_NETWORK, lower)) return CHAIN_ID_TO_NETWORK[lower]
+  return null
+}
+
+function randomUpstream(network) {
+  const list = RPC_UPSTREAMS[network]
+  return list[Math.floor(Math.random() * list.length)]
+}
+
+async function proxyRpc(network, jsonrpcReq, ctx = '') {
+  const url = randomUpstream(network)
+  const host = new URL(url).hostname
+  const method = typeof jsonrpcReq?.method === 'string' ? jsonrpcReq.method : '?'
+  const tag = ctx ? `[rpc ${ctx}]` : '[rpc]'
+  const started = Date.now()
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(jsonrpcReq),
+      signal: AbortSignal.timeout(RPC_UPSTREAM_TIMEOUT_MS)
+    })
+    const elapsed = Date.now() - started
+    console.log(`${tag} ${network} ${method} → ${host} ${res.status} (${elapsed}ms)`)
+    if (!res.ok) {
+      throw new Error(`upstream ${url} returned ${res.status}`)
+    }
+    return await res.json()
+  } catch (err) {
+    const elapsed = Date.now() - started
+    console.log(`${tag} ${network} ${method} → ${host} FAIL (${elapsed}ms): ${err.message}`)
+    throw err
+  }
+}
 
 async function generateTlsCertificate(days) {
   const keyPair = await crypto.subtle.generateKey(
@@ -234,6 +319,60 @@ await node.handle(CHAT_PROTO, async (stream, connection) => {
     peers.delete(remote)
     logRoster()
     broadcastRoster().catch(err => console.error(`roster: ${err.message}`))
+  })
+})
+
+await node.handle(RPC_PROTO, async (stream, connection) => {
+  const remote = connection.remotePeer.toString()
+  const shortId = remote.slice(-8)
+  console.log(`[rpc+] ${shortId}`)
+
+  let buf = ''
+  let closed = false
+
+  async function handleLine(line) {
+    let env
+    try { env = JSON.parse(line) } catch {
+      return sendObj(stream, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }).catch(() => {})
+    }
+    const id = env?.req?.id ?? null
+    try {
+      const network = resolveNetwork(env.network)
+      if (!network) throw new Error(`unknown network: ${env.network}`)
+      if (typeof env.req !== 'object' || env.req === null) throw new Error('missing req object')
+      const response = await proxyRpc(network, env.req, shortId)
+      // response already has jsonrpc/id/result|error from upstream
+      await sendObj(stream, response)
+    } catch (err) {
+      await sendObj(stream, {
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32603, message: 'proxy error', data: err.message }
+      }).catch(() => {})
+    }
+  }
+
+  stream.addEventListener('message', (event) => {
+    if (closed) return
+    buf += toString(event.data.subarray ? event.data.subarray() : event.data)
+    if (buf.length > RPC_MAX_BUF) {
+      console.warn(`[rpc] ${shortId}: inbound buffer overflow, closing stream`)
+      closed = true
+      stream.close().catch(() => {})
+      return
+    }
+    let idx
+    while ((idx = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, idx)
+      buf = buf.slice(idx + 1)
+      if (!line) continue
+      handleLine(line).catch((err) => console.error(`[rpc] ${shortId} handleLine: ${err.message}`))
+    }
+  })
+
+  stream.addEventListener('close', () => {
+    closed = true
+    console.log(`[rpc-] ${shortId}`)
   })
 })
 
