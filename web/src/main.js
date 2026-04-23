@@ -114,22 +114,30 @@ function nameFromPeerId(peerId) {
 }
 
 persistentIdentityInput.checked = localStorage.getItem(PERSISTENT_IDENTITY_KEY) === '1'
+// Re-sync after the full DOM + form-restoration pass, in case the browser
+// restored a stale checkbox state post-parse.
+window.addEventListener('pageshow', () => {
+  persistentIdentityInput.checked = localStorage.getItem(PERSISTENT_IDENTITY_KEY) === '1'
+})
 persistentIdentityInput.addEventListener('change', async () => {
   localStorage.setItem(PERSISTENT_IDENTITY_KEY, persistentIdentityInput.checked ? '1' : '0')
   if (persistentIdentityInput.checked) {
-    // prefer the saved key if one exists; otherwise promote current ephemeral to persistent
     const saved = localStorage.getItem(IDENTITY_KEY_STORAGE_KEY)
     if (saved) {
+      // A saved persistent identity already exists — restore it.
       try { identityKey = privateKeyFromProtobuf(b64dec(saved)) } catch (err) {
         console.warn(`saved identity unreadable (${err.message}); keeping current in-memory key`)
       }
-    } else if (identityKey) {
+    } else {
+      // No saved identity yet — mint a fresh one. We do NOT promote the
+      // current ephemeral, since it was generated under non-persistent
+      // mode; persistent identity is kept distinct from temporary.
+      identityKey = await generateKeyPair('Ed25519')
       localStorage.setItem(IDENTITY_KEY_STORAGE_KEY, b64enc(privateKeyToProtobuf(identityKey)))
     }
   } else {
-    // Unchecking: swap in a fresh ephemeral so we're no longer using the
-    // persistent key. The saved key in localStorage is left intact so
-    // re-ticking later will restore it.
+    // Unchecking: swap in a fresh ephemeral. Saved key in localStorage is
+    // left intact so re-ticking later will restore it.
     identityKey = await generateKeyPair('Ed25519')
   }
   updateIdentityDisplay()
@@ -1041,8 +1049,17 @@ function markDeliveryStatus(id, status) {
 
 // ------- lifecycle -------
 
+function isPersistentPrefEnabled() {
+  return localStorage.getItem(PERSISTENT_IDENTITY_KEY) === '1'
+}
+
 async function initializeIdentity() {
-  if (persistentIdentityInput.checked) {
+  // Read the preference from storage (the source of truth). Browser
+  // form-state restoration can desync the checkbox from localStorage,
+  // so don't trust `.checked` here.
+  const persistent = isPersistentPrefEnabled()
+  persistentIdentityInput.checked = persistent
+  if (persistent) {
     const saved = localStorage.getItem(IDENTITY_KEY_STORAGE_KEY)
     if (saved) {
       try {
