@@ -76,6 +76,28 @@
         </section>
 
         <section class="card">
+          <h3>One dependency left: hosting the client</h3>
+          <p class="lede-sm">
+            Everything above removes authority requirements from the
+            <em>server</em>. But the browser app itself is still hosted
+            somewhere — in this case on GitHub Pages — which requires
+            https, which requires a CA-signed cert for a registered
+            domain. That's the last authority-controlled link in the
+            chain between you and the server.
+          </p>
+          <p class="lede-sm">
+            A Chromium extension build of the same app loads from
+            <code>chrome-extension://&lt;id&gt;/</code>: trusted at
+            install time rather than by a public CA. Build it yourself
+            with <code>npm run build:extension</code> in the
+            <code>web/</code> directory and load
+            <code>dist-extension/</code> as an unpacked extension. Now
+            neither the page nor its connection to the server depends
+            on a domain registrar or a certificate authority.
+          </p>
+        </section>
+
+        <section class="card">
           <h3>What runs on top</h3>
           <p class="lede-sm">
             The transport is the point; this demo bolts two example services

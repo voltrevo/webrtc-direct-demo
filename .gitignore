@@ -9,6 +9,7 @@ server-go/identity.key
 # web
 web/node_modules/
 web/dist/
+web/dist-extension/
 
 # editor / os
 .DS_Store

@@ -120,6 +120,31 @@ npm run dev
 Open the printed URL, paste a multiaddr from the server, click
 Connect.
 
+## Browser extension — removing the last CA dependency
+
+The web version of this demo is hosted on GitHub Pages. That page
+still has to arrive over https, which still means a CA-signed cert
+for a registered domain — the one authority-controlled link the
+transport itself no longer needs.
+
+Building the same app as a Chromium MV3 extension removes that last
+dependency. The page loads from `chrome-extension://<id>/`, trusted
+at install time rather than by a public CA. Neither the page nor its
+connection to the server depends on a domain registrar or a
+certificate authority.
+
+```sh
+cd web
+npm run build:extension
+```
+
+Output lands in `web/dist-extension/`. Load it in Chrome via
+**Extensions → Developer mode → Load unpacked** and point at that
+folder. Clicking the toolbar icon opens the demo in a new tab. The
+extension has no special host permissions and no CSP allow-list —
+the WebRTC Direct dial is a raw UDP connection from the extension
+page, which Chrome allows from any origin without declaration.
+
 ## Deploying the web app to GitHub Pages
 
 1. Push this repo to GitHub.

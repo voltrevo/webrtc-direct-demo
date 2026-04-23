@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "WebRTC Direct Demo",
+  "version": "0.1.0",
+  "description": "A libp2p WebRTC Direct client — connects your browser to a server over raw UDP with no CA, domain, or signalling server required.",
+  "action": {
+    "default_title": "Open WebRTC Direct Demo"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}
