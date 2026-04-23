@@ -802,6 +802,17 @@ button.ghost:hover:not(:disabled) { background: var(--surface-2); }
 .view { display: block; }
 .view[hidden] { display: none; }
 
+.banner {
+  margin: 0 0 1.5rem;
+}
+.banner img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
 .hero {
   margin-bottom: 1.25rem;
 }

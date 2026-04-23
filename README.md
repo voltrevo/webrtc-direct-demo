@@ -1,47 +1,76 @@
 # webrtc-direct-demo
 
-A tiny chat room that uses **libp2p's WebRTC Direct transport** so the browser
-can dial a server over raw UDP — no signalling server, no STUN/TURN, no
-pre-trusted TLS certificate. The server's self-signed cert is pinned by a
-`certhash` component inside its multiaddr.
+**[Try it →](https://voltrevo.github.io/webrtc-direct-demo/#demo)**
 
-- `server/` — Bun + `js-libp2p` host exposing a `/chat/1.0.0` stream handler.
-  Broadcasts each message to every other connected peer, and acks the sender.
-- `server-go/` — the same protocol implemented with `go-libp2p`. Kept around
-  for cross-implementation debugging; either server works with the browser
-  client. Note: go-libp2p's webrtc transport regenerates its TLS cert on
-  every start, so the `/certhash/...` component changes per run.
-- `web/` — Vite + `js-libp2p` static app. You paste the server's multiaddr,
-  click Connect, and chat.
-- `.github/workflows/pages.yml` — builds `web/` and publishes to GitHub Pages.
+A browser-to-server demo for **libp2p's WebRTC Direct transport**:
+connects to a server without any permission from a domain registrar or
+certificate authority.
 
-## Run the server
+- WebRTC is designed for p2p communication. The two ends can be
+  browsers, so it can't require one side to have a domain and signed
+  TLS certificate.
+- However, WebRTC normally needs a signalling server to relay the SDP
+  offer/answer and ICE candidates between the two ends. That server
+  needs a domain and cert of its own — so the requirement just moves.
+- WebRTC Direct is a client-server variant. The server listens on an
+  IP and UDP port, and both sides *synthesize* the SDP from
+  out-of-band info instead of exchanging it: the browser derives the
+  server's answer from the multiaddr, and the server derives the
+  browser's offer from the `ufrag` it sees in the incoming STUN
+  request. No signalling.
+- All comms stay end-to-end encrypted. The multiaddr pins two
+  different keys: `/certhash/…` is the SHA-256 of the server's
+  self-signed TLS cert (verified during DTLS, no CA required), and
+  `/p2p/12D3Koo…` is the server's libp2p identity, proven via a Noise
+  XX handshake inside the first data channel.
 
-Needs Node.js 22+. `bun install` is fine for installing deps (faster), but run
-the server itself under Node — Bun's event loop currently doesn't drive the
-native `node-datachannel` UDP socket, so the listener stays silent.
+## What runs on top
+
+The transport is the point; this demo bolts two example services onto
+it, both speaking libp2p stream protocols.
+
+- **Chat** (`/chat/1.0.0`) — a public bulletin plus end-to-end
+  encrypted direct messages. Each client's DM key is signed by their
+  libp2p identity, so the server can route messages but can't read or
+  forge DMs.
+- **Block explorer** (`/eth-rpc/1.0.0`) — the server proxies JSON-RPC
+  calls to curated public endpoints for Ethereum, Arbitrum, Optimism,
+  Base, and Polygon; the browser renders a small live explorer from
+  the responses. The server sees your queries; the public RPC
+  endpoints only see the server's IP.
+
+## How the trust works
+
+1. The server generates a fresh self-signed TLS certificate at
+   startup.
+2. It encodes the SHA-256 of that certificate into its multiaddr as
+   `/certhash/...`, alongside its IP, UDP port, and libp2p peer ID.
+3. You paste that multiaddr into the browser. The browser now knows
+   the endpoint *and* the exact certificate fingerprint to expect.
+4. The browser dials the IP and UDP port directly. It accepts the
+   DTLS handshake only if the cert hashes to the pinned value. A
+   Noise XX handshake on top then proves the libp2p peer ID.
+
+No domain. No certificate authority. No signalling relay. If the
+multiaddr reached you intact, the connection cannot be intercepted.
+
+## Run your own server
+
+Needs Node.js 22+. Clone this repo, then:
 
 ```sh
 cd server
-npm install          # or: bun install
-npm start            # runs: node index.js
+npm install
+npm start
 ```
 
-On first run the server generates:
-
-- a libp2p Ed25519 peer key
-- a self-signed WebRTC TLS cert (200-year lifespan so `certhash` is
-  effectively permanent)
-- a free UDP port
-
-and writes all three into a single file, `./state.json`. Subsequent
-starts load from that file, so the full multiaddr — IP, port, certhash,
-peer ID — stays byte-identical across restarts. If the saved port is
-already in use on a later start, the server fails loudly rather than
-silently picking a new one (which would break the saved multiaddr).
-
-Override with the `LISTEN` env var if you want to pick a specific port
-yourself or listen on multiple addresses.
+On first run the server generates a libp2p Ed25519 peer key, a
+self-signed WebRTC TLS cert (200-year lifespan so `certhash` is
+effectively permanent), and picks a free UDP port — all persisted to
+`./state.json`. Subsequent starts reload that state, so the full
+multiaddr (IP, port, certhash, peer ID) stays byte-identical across
+restarts. If the saved port is already in use on a later start, the
+server fails loudly rather than silently breaking the saved multiaddr.
 
 Output looks like:
 
@@ -51,29 +80,23 @@ listening; dial one of these multiaddrs from the browser:
   /ip4/192.168.1.50/udp/41108/webrtc-direct/certhash/uEi.../p2p/12D3Koo...
 ```
 
-Pick the one the browser can reach:
+### Pick the right multiaddr
 
-- **Same machine as the server** → the `127.0.0.1` line.
-- **Another device on the LAN** → the LAN IP line.
-- **Over the internet** → run on a public IP (or port-forward the UDP port).
+WebRTC Direct is just UDP underneath. The browser must be able to
+reach the server's UDP port directly, so pick the address that
+matches where you are:
+
+- **Same machine** as the server — use the `127.0.0.1` line.
+- **Same LAN** — use the LAN IP line (`192.168.x.x`, `10.x.x.x`).
+- **Across the internet** — run the server on a public IP, or
+  forward the UDP port printed in the multiaddr.
 
 ### Env vars
 
 ```
-LISTEN        listen multiaddr  (override; suppresses state.json port handling)
-STATE_FILE    persisted state path     (default: ./state.json)
+LISTEN      listen multiaddr  (override; suppresses state.json port handling)
+STATE_FILE  persisted state path     (default: ./state.json)
 ```
-
-### Go server (alternative)
-
-Needs Go 1.24+. Same protocol, useful for cross-impl debugging:
-
-```sh
-cd server-go
-go run . -listen /ip4/0.0.0.0/udp/41234/webrtc-direct
-```
-
-Flags: `-key identity.key`, `-listen /ip4/0.0.0.0/udp/0/webrtc-direct`.
 
 ## Run the web app locally
 
@@ -83,34 +106,26 @@ npm install
 npm run dev
 ```
 
-Open the printed URL, paste a multiaddr from the server, click Connect.
+Open the printed URL, paste a multiaddr from the server, click
+Connect.
 
 ## Deploying the web app to GitHub Pages
 
 1. Push this repo to GitHub.
 2. In the repo, open **Settings → Pages** and set **Source** to
    **GitHub Actions**.
-3. The workflow in `.github/workflows/pages.yml` builds `web/` and publishes
-   on every push to `main` that changes `web/**`. Trigger the first run by
-   pushing, or via **Actions → Deploy web app to GitHub Pages → Run
-   workflow**.
+3. The workflow in [`.github/workflows/pages.yml`](.github/workflows/pages.yml)
+   builds `web/` and publishes on every push to `main` that changes
+   `web/**`.
 
 The web app uses `base: './'` in `vite.config.js`, so it works at any
 repo-subpath URL.
 
-## Why this avoids a signalling server
+## Repository layout
 
-Classic browser WebRTC needs an out-of-band channel to exchange SDP
-offer/answer and ICE candidates. **WebRTC Direct** sidesteps that:
-
-- The server generates a self-signed TLS cert and hashes it into the listen
-  multiaddr (`/certhash/uEi...`).
-- The browser has the multiaddr (you paste it), so it already knows the
-  server's address, port, and exact cert fingerprint.
-- The browser sends a DTLS `ClientHello` straight at that UDP endpoint; no
-  SDP round-trip needed because both sides agree on the handshake parameters
-  up front. Noise XX inside the first data channel authenticates the libp2p
-  peer ID.
-
-So the only "signalling" here is you copying one line of text out of the
-server's stdout.
+- [`server/`](server/) — the Node + `js-libp2p` server: `/chat/1.0.0`
+  handler, `/eth-rpc/1.0.0` JSON-RPC proxy, persistent state.
+- [`web/`](web/) — the Vite + `js-libp2p` browser app (chat +
+  explorer) published to GitHub Pages.
+- [`.github/workflows/pages.yml`](.github/workflows/pages.yml) —
+  builds and publishes `web/` on push.

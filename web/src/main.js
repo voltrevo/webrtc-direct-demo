@@ -1063,6 +1063,15 @@ async function initializeIdentity() {
 }
 
 async function regenerateIdentity() {
+  if (persistentIdentityInput.checked) {
+    const ok = confirm(
+      'Replace your persistent identity?\n\n' +
+      'Your current peer ID and display name will be overwritten with a ' +
+      'fresh one, and the new key will be saved to this browser. This ' +
+      'cannot be undone.'
+    )
+    if (!ok) return
+  }
   identityKey = await generateKeyPair('Ed25519')
   if (persistentIdentityInput.checked) {
     localStorage.setItem(IDENTITY_KEY_STORAGE_KEY, b64enc(privateKeyToProtobuf(identityKey)))
@@ -1266,6 +1275,9 @@ function showApp() {
   renderRoster()
   renderLog()
   probeDemoServer().catch(() => {})
+  if (window.location.hash !== '#demo') {
+    history.replaceState(null, '', '#demo')
+  }
 }
 
 async function showLanding() {
@@ -1275,7 +1287,21 @@ async function showLanding() {
   statusEl.hidden = true
   titleEl.classList.remove('clickable')
   setStatus('', 'idle')
+  if (window.location.hash === '#demo') {
+    history.replaceState(null, '', window.location.pathname + window.location.search)
+  }
 }
+
+// Deep-link: /#demo skips the landing page.
+if (window.location.hash === '#demo') {
+  showApp()
+}
+window.addEventListener('hashchange', () => {
+  if (window.location.hash === '#demo' && appView.hidden) showApp()
+  else if (window.location.hash !== '#demo' && !appView.hidden) {
+    showLanding().catch(err => console.error('showLanding:', err))
+  }
+})
 
 tabMessagesEl.addEventListener('click', () => setActiveTab('messages'))
 tabExplorerEl.addEventListener('click', () => setActiveTab('explorer'))
