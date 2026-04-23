@@ -104,7 +104,15 @@ npm start</code></pre>
 
       <div id="app" class="view" hidden>
         <section class="card connection-card">
-          <label class="field-label" for="addr">Server multiaddr</label>
+          <label class="field-label" for="display-name">Your name</label>
+          <input
+            id="display-name"
+            class="name-input"
+            type="text"
+            autocomplete="off"
+            maxlength="40"
+          />
+          <label class="field-label field-label-spaced" for="addr">Server multiaddr</label>
           <input
             id="addr"
             class="addr-input"
@@ -120,18 +128,21 @@ npm start</code></pre>
           </div>
         </section>
 
-        <section class="card chat-card">
-          <div class="chat-messages" id="log" aria-live="polite"></div>
-          <form id="compose" class="compose">
-            <input
-              id="msg"
-              type="text"
-              placeholder="connect to start chatting"
-              autocomplete="off"
-              disabled
-            />
-            <button id="send" type="submit" class="primary" disabled>Send</button>
-          </form>
+        <section class="card chat-card" id="chat-card" hidden>
+          <aside class="sidebar" id="roster" aria-label="Conversations"></aside>
+          <div class="chat-main">
+            <div class="chat-messages" id="log" aria-live="polite"></div>
+            <form id="compose" class="compose">
+              <input
+                id="msg"
+                type="text"
+                placeholder="connect to start chatting"
+                autocomplete="off"
+                disabled
+              />
+              <button id="send" type="submit" class="primary" disabled>Send</button>
+            </form>
+          </div>
         </section>
       </div>
     </div>

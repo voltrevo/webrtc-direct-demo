@@ -103,8 +103,23 @@ if (!explicitListen && existing == null) {
   console.log(`saved state to ${STATE_PATH}; future starts will reuse this identity, port, and cert`)
 }
 
-/** @type {Map<string, import('@libp2p/interface').Stream>} */
+/**
+ * @typedef {{
+ *   stream: import('@libp2p/interface').Stream,
+ *   dmPublicKey: string | null,
+ *   dmSignature: string | null,
+ *   name: string | null,
+ *   shortId: string
+ * }} PeerEntry
+ */
+/** @type {Map<string, PeerEntry>} */
 const peers = new Map()
+
+function sanitizeName(n) {
+  if (typeof n !== 'string') return null
+  const trimmed = n.trim().slice(0, 40)
+  return trimmed || null
+}
 
 async function sendObj(stream, obj) {
   const bytes = fromString(JSON.stringify(obj) + '\n')
@@ -113,45 +128,52 @@ async function sendObj(stream, obj) {
   }
 }
 
-function addPeer(id, stream) {
-  const existing = peers.get(id)
-  if (existing) {
-    try { existing.close() } catch {}
-  }
-  peers.set(id, stream)
+function rosterSnapshot() {
+  return Array.from(peers.entries())
+    .filter(([, p]) => p.dmPublicKey != null && p.dmSignature != null)
+    .map(([peerId, p]) => ({
+      peerId,
+      dmPublicKey: p.dmPublicKey,
+      dmSignature: p.dmSignature,
+      name: p.name ?? p.shortId
+    }))
 }
 
-function removePeer(id, stream) {
-  if (peers.get(id) === stream) peers.delete(id)
+function logRoster() {
+  const ready = [...peers.values()].filter(p => p.dmPublicKey != null)
+  const labels = ready.map(p => `${p.name ?? p.shortId}(${p.shortId})`).join(', ')
+  console.log(`[roster] ${ready.length} peer(s): ${labels || '(none)'}`)
 }
 
-async function broadcast(from, text) {
-  const targets = []
-  for (const [id, s] of peers) {
-    if (id === from) continue
-    targets.push([id, s])
-  }
+async function broadcastRoster() {
+  const msg = { type: 'roster', peers: rosterSnapshot() }
+  const ready = [...peers.values()].filter(p => p.dmPublicKey != null)
   await Promise.allSettled(
-    targets.map(async ([id, s]) => {
-      try {
-        await sendObj(s, { type: 'msg', from, text })
-      } catch (err) {
-        console.error(`broadcast to ${id}: ${err.message}`)
-      }
-    })
+    ready.map(p => sendObj(p.stream, msg).catch(() => {}))
   )
+}
+
+async function forward(targetPeerId, msg) {
+  const target = peers.get(targetPeerId)
+  if (!target?.dmPublicKey) return false
+  try {
+    await sendObj(target.stream, msg)
+    return true
+  } catch {
+    return false
+  }
 }
 
 await node.handle(CHAT_PROTO, async (stream, connection) => {
   const remote = connection.remotePeer.toString()
+  const shortId = remote.slice(-8)
   console.log(`[+] peer connected: ${remote}`)
-  addPeer(remote, stream)
+  const entry = { stream, dmPublicKey: null, dmSignature: null, name: null, shortId }
+  peers.set(remote, entry)
 
   let buf = ''
-
   stream.addEventListener('message', async (event) => {
-    const chunk = event.data
-    buf += toString(chunk.subarray ? chunk.subarray() : chunk)
+    buf += toString(event.data.subarray ? event.data.subarray() : event.data)
     let idx
     while ((idx = buf.indexOf('\n')) !== -1) {
       const line = buf.slice(0, idx)
@@ -160,23 +182,58 @@ await node.handle(CHAT_PROTO, async (stream, connection) => {
       let msg
       try {
         msg = JSON.parse(line)
-      } catch (err) {
-        console.error(`bad json from ${remote}: ${err.message}`)
+      } catch {
         continue
       }
-      if (typeof msg.text !== 'string' || !msg.text) continue
-      try {
-        await sendObj(stream, { type: 'ack' })
-      } catch (err) {
-        console.error(`ack to ${remote}: ${err.message}`)
+
+      if (
+        msg.type === 'hello' &&
+        typeof msg.dmPublicKey === 'string' &&
+        typeof msg.dmSignature === 'string' &&
+        entry.dmPublicKey == null
+      ) {
+        entry.dmPublicKey = msg.dmPublicKey
+        entry.dmSignature = msg.dmSignature
+        entry.name = sanitizeName(msg.name)
+        logRoster()
+        broadcastRoster().catch(err => console.error(`roster: ${err.message}`))
+      } else if (
+        msg.type === 'dm' &&
+        typeof msg.to === 'string' &&
+        typeof msg.iv === 'string' &&
+        typeof msg.ciphertext === 'string'
+      ) {
+        const delivered = await forward(msg.to, {
+          type: 'dm',
+          from: remote,
+          iv: msg.iv,
+          ciphertext: msg.ciphertext
+        })
+        const reply = delivered
+          ? { type: 'ack', id: msg.id }
+          : { type: 'dm-fail', id: msg.id, reason: 'peer unreachable' }
+        await sendObj(stream, reply).catch(() => {})
+      } else if (
+        msg.type === 'bulletin' &&
+        typeof msg.text === 'string' &&
+        msg.text.length > 0
+      ) {
+        const out = { type: 'bulletin', from: remote, text: msg.text.slice(0, 4000) }
+        const targets = [...peers.entries()]
+          .filter(([id, p]) => id !== remote && p.dmPublicKey != null)
+        await Promise.allSettled(
+          targets.map(([, p]) => sendObj(p.stream, out).catch(() => {}))
+        )
+        await sendObj(stream, { type: 'ack', id: msg.id }).catch(() => {})
       }
-      broadcast(remote, msg.text).catch((err) => console.error(`broadcast: ${err.message}`))
     }
   })
 
   stream.addEventListener('close', () => {
     console.log(`[-] peer disconnected: ${remote}`)
-    removePeer(remote, stream)
+    peers.delete(remote)
+    logRoster()
+    broadcastRoster().catch(err => console.error(`roster: ${err.message}`))
   })
 })
 

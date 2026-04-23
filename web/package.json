@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@libp2p/crypto": "^5.1.17",
+    "@libp2p/peer-id": "^6.0.8",
     "@libp2p/webrtc": "^6.0.19",
     "@multiformats/multiaddr": "^13.0.1",
     "libp2p": "^3.2.2",
