@@ -5,10 +5,9 @@
 ## Connection Freedom in the Browser
 
 Browser vendors migrated the web from http to https in the mid-2010s.
-That 's' stands for secure, and rightly so — plain http is
-unencrypted, and that's not ok.
+That 's' adds encryption via TLS, which is great.
 
-However, https doesn't just add encryption. It also adds:
+However, https also adds:
 
 1. You must use a domain controlled by a domain registrar.
 2. You must present a certificate signed by a certificate authority.
