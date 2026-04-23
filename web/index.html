@@ -128,15 +128,25 @@ npm start</code></pre>
 
       <div id="app" class="view" hidden>
         <section class="card connection-card">
-          <label class="field-label" for="display-name">Your name</label>
-          <input
-            id="display-name"
-            class="name-input"
-            type="text"
-            autocomplete="off"
-            maxlength="40"
-          />
-          <label class="field-label field-label-spaced" for="addr">Server multiaddr</label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="persistent-identity" />
+            <span>Use persistent identity</span>
+            <span class="hint">keeps your libp2p peer ID (and derived display name) stable across reloads; unchecked = fresh Ed25519 per visit</span>
+          </label>
+
+          <div class="identity-row">
+            <div class="identity-display">
+              <div class="identity-label">Identity</div>
+              <div class="identity-name" id="identity-name">—</div>
+              <div class="identity-peer" id="identity-peer">…</div>
+            </div>
+            <button type="button" id="identity-refresh" class="ghost" aria-label="Regenerate identity" title="Regenerate identity">↻</button>
+          </div>
+
+          <label class="field-label field-label-spaced" for="addr-quick">Server</label>
+          <select id="addr-quick" class="addr-select">
+            <option value="">— pick or paste below —</option>
+          </select>
           <input
             id="addr"
             class="addr-input"
@@ -146,10 +156,11 @@ npm start</code></pre>
             spellcheck="false"
           />
           <div class="button-row">
+            <button id="check" type="button" class="ghost">Check</button>
             <button id="connect" class="primary">Connect</button>
             <button id="disconnect" class="ghost" disabled>Disconnect</button>
-            <span class="peer-id" id="my-peer"></span>
           </div>
+          <div id="reach-result" class="reach-result" hidden></div>
         </section>
 
         <section class="card chat-card" id="chat-card" hidden>

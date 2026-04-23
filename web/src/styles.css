@@ -209,6 +209,29 @@ button.ghost:hover:not(:disabled) { background: var(--surface-2); }
   color: var(--text-muted);
 }
 
+.reach-result {
+  margin-top: 0.6rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.reach-result[hidden] { display: none; }
+.reach-result.working { border-color: var(--warn); }
+.reach-result.ok {
+  border-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, var(--surface-2));
+  color: var(--text);
+}
+.reach-result.err {
+  border-color: var(--err);
+  background: var(--err-weak);
+  color: var(--err);
+}
+
 .chat-card {
   padding: 0;
   display: flex;
@@ -589,6 +612,83 @@ button.ghost:hover:not(:disabled) { background: var(--surface-2); }
   box-shadow: 0 0 0 3px var(--accent-weak);
 }
 .name-input:disabled { opacity: 0.7; }
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  font-size: 0.88rem;
+  color: var(--text);
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+.checkbox-row input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.checkbox-row .hint {
+  flex: 1 1 100%;
+  margin-left: 1.4rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.identity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.identity-display { min-width: 0; }
+.identity-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.identity-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.2;
+  margin-top: 0.1rem;
+}
+.identity-peer {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.1rem;
+}
+#identity-refresh {
+  flex-shrink: 0;
+  padding: 0.25rem 0.6rem;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.addr-select {
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.85rem;
+  color: inherit;
+  font: inherit;
+  margin-bottom: 0.4rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.addr-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
 
 .bubble.failed {
   background: var(--err-weak);

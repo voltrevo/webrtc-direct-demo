@@ -1,7 +1,7 @@
 import { createLibp2p } from 'libp2p'
 import { webRTCDirect } from '@libp2p/webrtc'
-import { generateKeyPair } from '@libp2p/crypto/keys'
-import { peerIdFromString } from '@libp2p/peer-id'
+import { generateKeyPair, privateKeyFromProtobuf, privateKeyToProtobuf } from '@libp2p/crypto/keys'
+import { peerIdFromString, peerIdFromPrivateKey } from '@libp2p/peer-id'
 import { multiaddr } from '@multiformats/multiaddr'
 import { fromString, toString } from 'uint8arrays'
 
@@ -9,6 +9,11 @@ const CHAT_PROTO = '/chat/1.0.0'
 const RPC_PROTO = '/eth-rpc/1.0.0'
 const BULLETIN = '__bulletin__'
 const RPC_TIMEOUT_MS = 20_000
+
+const DEMO_MULTIADDR = '/ip4/170.64.236.147/udp/34465/webrtc-direct/certhash/uEiD6uHw4qBKXqRw8HFr-IizSQYsZE7Js5Q8rr_N6DAxgCw/p2p/12D3KooWGv2Rtt1rjXFkPJhxMqUMVQkgbZDMsrpgvg44EoiuGnNG'
+const SAVED_MULTIADDRS_KEY = 'saved-multiaddrs'
+const PERSISTENT_IDENTITY_KEY = 'persistent-identity'
+const IDENTITY_KEY_STORAGE_KEY = 'identity-key'
 
 const NETWORKS = [
   { key: 'ethereum', name: 'Ethereum', chainId: 1 },
@@ -19,14 +24,19 @@ const NETWORKS = [
 ]
 
 const $ = (id) => document.getElementById(id)
-const nameInput = $('display-name')
+const persistentIdentityInput = $('persistent-identity')
 const addrInput = $('addr')
+const addrSelect = $('addr-quick')
 const connectBtn = $('connect')
+const checkBtn = $('check')
+const reachResultEl = $('reach-result')
 const disconnectBtn = $('disconnect')
 const statusEl = $('status')
 const statusDot = $('status-dot')
 const statusText = $('status-text')
-const myPeerEl = $('my-peer')
+const identityNameEl = $('identity-name')
+const identityPeerEl = $('identity-peer')
+const identityRefreshBtn = $('identity-refresh')
 const rosterEl = $('roster')
 const logEl = $('log')
 const msgInput = $('msg')
@@ -91,15 +101,151 @@ let nextOutgoingId = 1
 const ADJECTIVES = ['quiet', 'bold', 'clever', 'noble', 'wild', 'swift', 'shy', 'merry', 'bright', 'grumpy', 'keen', 'vivid', 'sleek', 'dusty', 'bouncy', 'crispy', 'gentle', 'fierce', 'tipsy', 'fancy', 'sneaky', 'cozy', 'sturdy', 'breezy', 'tiny', 'jolly', 'spry', 'mellow', 'zesty', 'plucky', 'hazy', 'nimble']
 const NOUNS = ['raven', 'panda', 'fox', 'otter', 'moth', 'ox', 'lark', 'newt', 'wren', 'owl', 'quokka', 'yak', 'badger', 'crow', 'moose', 'heron', 'stoat', 'toad', 'seal', 'gecko', 'orca', 'hare', 'lynx', 'bison', 'snail', 'elk', 'squid', 'goose', 'axolotl', 'pangolin', 'walrus', 'narwhal']
 
-function randomName() {
-  const a = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
-  const n = NOUNS[Math.floor(Math.random() * NOUNS.length)]
-  return `${a}-${n}`
+function nameFromPeerId(peerId) {
+  // FNV-1a (32 bit) of the peer ID string; deterministic so the same
+  // identity always renders under the same display name.
+  let hash = 2166136261 >>> 0
+  for (let i = 0; i < peerId.length; i++) {
+    hash = Math.imul(hash ^ peerId.charCodeAt(i), 16777619) >>> 0
+  }
+  const adj = ADJECTIVES[hash % ADJECTIVES.length]
+  const noun = NOUNS[Math.floor(hash / ADJECTIVES.length) % NOUNS.length]
+  return `${adj}-${noun}`
 }
 
-nameInput.value = randomName()
-const savedAddr = localStorage.getItem('server-multiaddr')
-if (savedAddr) addrInput.value = savedAddr
+persistentIdentityInput.checked = localStorage.getItem(PERSISTENT_IDENTITY_KEY) === '1'
+persistentIdentityInput.addEventListener('change', async () => {
+  localStorage.setItem(PERSISTENT_IDENTITY_KEY, persistentIdentityInput.checked ? '1' : '0')
+  if (persistentIdentityInput.checked) {
+    // prefer the saved key if one exists; otherwise promote current ephemeral to persistent
+    const saved = localStorage.getItem(IDENTITY_KEY_STORAGE_KEY)
+    if (saved) {
+      try { identityKey = privateKeyFromProtobuf(b64dec(saved)) } catch (err) {
+        console.warn(`saved identity unreadable (${err.message}); keeping current in-memory key`)
+      }
+    } else if (identityKey) {
+      localStorage.setItem(IDENTITY_KEY_STORAGE_KEY, b64enc(privateKeyToProtobuf(identityKey)))
+    }
+  } else {
+    // Unchecking: swap in a fresh ephemeral so we're no longer using the
+    // persistent key. The saved key in localStorage is left intact so
+    // re-ticking later will restore it.
+    identityKey = await generateKeyPair('Ed25519')
+  }
+  updateIdentityDisplay()
+})
+
+let demoReachable = false
+let savedMultiaddrs = loadSavedMultiaddrs()
+
+function loadSavedMultiaddrs() {
+  try {
+    const raw = localStorage.getItem(SAVED_MULTIADDRS_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed.filter(s => typeof s === 'string')
+    }
+  } catch {}
+  // one-time migration from the old single-value key
+  const legacy = localStorage.getItem('server-multiaddr')
+  if (legacy) {
+    localStorage.setItem(SAVED_MULTIADDRS_KEY, JSON.stringify([legacy]))
+    localStorage.removeItem('server-multiaddr')
+    return [legacy]
+  }
+  return []
+}
+
+function rememberMultiaddr(ma) {
+  savedMultiaddrs = [ma, ...savedMultiaddrs.filter(s => s !== ma)].slice(0, 10)
+  localStorage.setItem(SAVED_MULTIADDRS_KEY, JSON.stringify(savedMultiaddrs))
+  renderAddrDropdown()
+}
+
+function shortMaLabel(maStr) {
+  const m = maStr.match(/\/ip4\/([^/]+)\/udp\/(\d+)\//)
+  if (m) return `${m[1]}:${m[2]}`
+  return maStr.length > 48 ? maStr.slice(0, 45) + '…' : maStr
+}
+
+function renderAddrDropdown() {
+  const current = addrInput.value.trim()
+  addrSelect.innerHTML = ''
+  const placeholder = document.createElement('option')
+  placeholder.value = ''
+  placeholder.textContent = '— pick or paste below —'
+  addrSelect.appendChild(placeholder)
+
+  if (demoReachable) {
+    const opt = document.createElement('option')
+    opt.value = DEMO_MULTIADDR
+    opt.textContent = `Demo server · ${shortMaLabel(DEMO_MULTIADDR)}`
+    addrSelect.appendChild(opt)
+  }
+
+  const others = savedMultiaddrs.filter(s => s !== DEMO_MULTIADDR)
+  if (others.length > 0) {
+    const group = document.createElement('optgroup')
+    group.label = 'recent'
+    for (const ma of others) {
+      const opt = document.createElement('option')
+      opt.value = ma
+      opt.textContent = shortMaLabel(ma)
+      group.appendChild(opt)
+    }
+    addrSelect.appendChild(group)
+  }
+
+  // preserve current selection if it still matches an option
+  if (current && [...addrSelect.options].some(o => o.value === current)) {
+    addrSelect.value = current
+  }
+}
+
+addrSelect.addEventListener('change', () => {
+  if (addrSelect.value) {
+    addrInput.value = addrSelect.value
+    setReachState('', '')
+  }
+})
+
+addrInput.addEventListener('input', () => {
+  // sync select to match input when possible
+  if ([...addrSelect.options].some(o => o.value === addrInput.value)) {
+    addrSelect.value = addrInput.value
+  } else {
+    addrSelect.value = ''
+  }
+})
+
+renderAddrDropdown()
+// pre-fill with the most recent address so Connect works out of the box
+if (savedMultiaddrs.length > 0) {
+  addrInput.value = savedMultiaddrs[0]
+  if ([...addrSelect.options].some(o => o.value === savedMultiaddrs[0])) {
+    addrSelect.value = savedMultiaddrs[0]
+  }
+}
+
+async function probeDemoServer() {
+  let probeNode = null
+  try {
+    probeNode = await createLibp2p({
+      transports: [webRTCDirect()],
+      connectionGater: { denyDialMultiaddr: () => false }
+    })
+    await probeNode.start()
+    const conn = await probeNode.dial(multiaddr(DEMO_MULTIADDR), { signal: AbortSignal.timeout(5_000) })
+    try { await conn.close() } catch {}
+    demoReachable = true
+    renderAddrDropdown()
+  } catch (err) {
+    console.info('demo server probe failed:', err.message)
+    demoReachable = false
+  } finally {
+    if (probeNode) try { await probeNode.stop() } catch {}
+  }
+}
 
 // ------- util -------
 
@@ -134,7 +280,6 @@ function setConnected(connected) {
   connectBtn.disabled = connected
   disconnectBtn.disabled = !connected
   addrInput.disabled = connected
-  nameInput.disabled = connected
   chatCardEl.hidden = !connected
   if (!connected) {
     activeTab = 'messages'
@@ -896,6 +1041,95 @@ function markDeliveryStatus(id, status) {
 
 // ------- lifecycle -------
 
+async function initializeIdentity() {
+  if (persistentIdentityInput.checked) {
+    const saved = localStorage.getItem(IDENTITY_KEY_STORAGE_KEY)
+    if (saved) {
+      try {
+        identityKey = privateKeyFromProtobuf(b64dec(saved))
+      } catch (err) {
+        console.warn(`saved identity unreadable (${err.message}); using ephemeral this session — click refresh to overwrite`)
+      }
+    }
+    if (!identityKey) {
+      identityKey = await generateKeyPair('Ed25519')
+      // first-time creation under persistent mode; this is not an overwrite
+      localStorage.setItem(IDENTITY_KEY_STORAGE_KEY, b64enc(privateKeyToProtobuf(identityKey)))
+    }
+  } else {
+    identityKey = await generateKeyPair('Ed25519')
+  }
+  updateIdentityDisplay()
+}
+
+async function regenerateIdentity() {
+  identityKey = await generateKeyPair('Ed25519')
+  if (persistentIdentityInput.checked) {
+    localStorage.setItem(IDENTITY_KEY_STORAGE_KEY, b64enc(privateKeyToProtobuf(identityKey)))
+  }
+  updateIdentityDisplay()
+}
+
+function updateIdentityDisplay() {
+  if (!identityKey) {
+    identityNameEl.textContent = '—'
+    identityPeerEl.textContent = '…'
+    return
+  }
+  const peerId = peerIdFromPrivateKey(identityKey).toString()
+  myPeerId = peerId
+  myName = nameFromPeerId(peerId)
+  identityNameEl.textContent = myName
+  identityPeerEl.textContent = shortId(peerId)
+}
+
+// kick this off eagerly so the display is populated before the user clicks Connect
+initializeIdentity().catch(err => console.error('identity init:', err))
+
+identityRefreshBtn.addEventListener('click', () => {
+  regenerateIdentity().catch(err => console.error('identity refresh:', err))
+})
+
+function setReachState(kind, text) {
+  reachResultEl.hidden = !text
+  reachResultEl.className = `reach-result${kind ? ` ${kind}` : ''}`
+  reachResultEl.textContent = text
+}
+
+async function checkReachable() {
+  const value = addrInput.value.trim()
+  if (!value) {
+    setReachState('err', 'enter a multiaddr first')
+    return
+  }
+  let ma
+  try { ma = multiaddr(value) } catch (err) {
+    setReachState('err', `bad multiaddr: ${err.message}`)
+    return
+  }
+  checkBtn.disabled = true
+  setReachState('working', 'probing…')
+  let probeNode = null
+  const started = Date.now()
+  try {
+    probeNode = await createLibp2p({
+      transports: [webRTCDirect()],
+      connectionGater: { denyDialMultiaddr: () => false }
+    })
+    await probeNode.start()
+    const conn = await probeNode.dial(ma, { signal: AbortSignal.timeout(5_000) })
+    const elapsed = Date.now() - started
+    try { await conn.close() } catch {}
+    setReachState('ok', `reachable · ${elapsed} ms (DTLS + Noise OK, peer ID matches)`)
+  } catch (err) {
+    const elapsed = Date.now() - started
+    setReachState('err', `unreachable after ${elapsed} ms: ${err.message}`)
+  } finally {
+    if (probeNode) try { await probeNode.stop() } catch {}
+    checkBtn.disabled = false
+  }
+}
+
 async function connect() {
   const value = addrInput.value.trim()
   if (!value) return
@@ -904,13 +1138,13 @@ async function connect() {
     setStatus('err', `bad multiaddr: ${err.message}`)
     return
   }
-  myName = nameInput.value.trim() || randomName()
-  nameInput.value = myName
-  localStorage.setItem('server-multiaddr', value)
   setStatus('working', 'starting libp2p...')
 
   try {
-    identityKey = await generateKeyPair('Ed25519')
+    if (!identityKey) {
+      // very rare: initial materialization failed or is still pending
+      await initializeIdentity()
+    }
     await generateDmKeyPair()
     node = await createLibp2p({
       privateKey: identityKey,
@@ -918,8 +1152,9 @@ async function connect() {
       connectionGater: { denyDialMultiaddr: () => false }
     })
     await node.start()
+    // sanity: ensure myPeerId / myName stay in sync with the identity we actually used
     myPeerId = node.peerId.toString()
-    myPeerEl.textContent = `you: ${shortId(myPeerId)}`
+    myName = nameFromPeerId(myPeerId)
 
     setStatus('working', 'dialing...')
     stream = await node.dialProtocol(ma, CHAT_PROTO, {
@@ -949,6 +1184,8 @@ async function connect() {
       dmSignature: dmSignatureB64,
       name: myName
     })
+
+    rememberMultiaddr(value)
   } catch (err) {
     setStatus('err', `connect failed: ${err.message}`)
     await cleanup()
@@ -975,13 +1212,9 @@ async function cleanup() {
   roster.clear()
   conversations.clear()
   sharedKeyCache.clear()
-  identityKey = null
   dmKeyPair = null
   dmPublicKeyB64 = null
   dmSignatureB64 = null
-  myPeerId = null
-  myName = ''
-  myPeerEl.textContent = ''
   setConnected(false)
   renderRoster()
   renderLog()
@@ -1032,6 +1265,7 @@ function showApp() {
   addrInput.focus()
   renderRoster()
   renderLog()
+  probeDemoServer().catch(() => {})
 }
 
 async function showLanding() {
@@ -1050,13 +1284,11 @@ tryItBtn.addEventListener('click', showApp)
 titleEl.addEventListener('click', () => {
   if (titleEl.classList.contains('clickable')) showLanding()
 })
+checkBtn.addEventListener('click', checkReachable)
 connectBtn.addEventListener('click', connect)
 disconnectBtn.addEventListener('click', disconnect)
 composeForm.addEventListener('submit', (e) => { e.preventDefault(); sendMsg() })
 addrInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !connectBtn.disabled) connect()
-})
-nameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !connectBtn.disabled) connect()
 })
 
