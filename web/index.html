@@ -12,9 +12,12 @@
         <div>
           <h1 id="title">WebRTC Direct Demo</h1>
         </div>
-        <div class="status" id="status" hidden>
-          <span class="dot" id="status-dot"></span>
-          <span class="status-text" id="status-text">idle</span>
+        <div class="header-actions">
+          <button id="try-it" type="button" class="primary header-cta">Try it</button>
+          <div class="status" id="status" hidden>
+            <span class="dot" id="status-dot"></span>
+            <span class="status-text" id="status-text">idle</span>
+          </div>
         </div>
       </header>
 
@@ -28,7 +31,27 @@
           />
         </figure>
         <section class="hero">
-          <h2>Connects to a server without any permission from a domain registrar or certificate authority.</h2>
+          <h2>Connection Freedom in the Browser</h2>
+          <p class="lede">
+            Browser vendors migrated the web from http to https in the
+            mid-2010s. That 's' stands for secure, and rightly so — plain
+            http is unencrypted, and that's not ok.
+          </p>
+          <p class="lede">
+            However, https doesn't just add encryption. It also adds:
+          </p>
+          <ol class="lede hero-requirements">
+            <li>You must use a domain controlled by a domain registrar.</li>
+            <li>You must present a certificate signed by a certificate authority.</li>
+          </ol>
+          <p class="lede">
+            WebRTC Direct restores the freedom to talk to cryptographic
+            identities instead of just those with authority-controlled names.
+          </p>
+        </section>
+
+        <section class="card">
+          <h3>The workaround</h3>
           <ul>
             <li class="lede">
               WebRTC is designed for p2p communication. The two ends can be browsers,
@@ -129,9 +152,6 @@ npm start</code></pre>
           </ul>
         </section>
 
-        <div class="cta-row">
-          <button id="try-it" class="primary big">Try it</button>
-        </div>
       </div>
 
       <div id="app" class="view" hidden>

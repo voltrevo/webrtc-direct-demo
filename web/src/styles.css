@@ -67,17 +67,24 @@ body {
 }
 
 .page {
-  max-width: 760px;
+  max-width: 960px;
   margin: 0 auto;
   padding: 2rem 1rem 3rem;
 }
 
 .app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  margin-bottom: 1.25rem;
+  margin: -2rem 0 1.25rem;
+  padding: 1.25rem 0 0.75rem;
+  background: transparent;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .app-header h1 {
@@ -88,6 +95,15 @@ body {
 }
 .app-header h1.clickable { cursor: pointer; }
 .app-header h1.clickable:hover { color: var(--accent); }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.header-cta { padding: 0.45rem 1rem; }
+.header-cta[hidden] { display: none; }
 
 .tagline {
   margin: 0.25rem 0 0;
@@ -108,6 +124,7 @@ body {
   box-shadow: var(--shadow);
   white-space: nowrap;
 }
+.status[hidden] { display: none; }
 
 .dot {
   width: 8px;
@@ -814,10 +831,13 @@ button.ghost:hover:not(:disabled) { background: var(--surface-2); }
 }
 
 .hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
   margin-bottom: 1.25rem;
 }
 .hero h2 {
-  margin: 0 0 0.75rem;
+  margin: 0;
   font-size: 1.75rem;
   line-height: 1.2;
   letter-spacing: -0.015em;
@@ -827,7 +847,17 @@ button.ghost:hover:not(:disabled) { background: var(--surface-2); }
   font-size: 1.05rem;
   line-height: 1.55;
   color: var(--text);
-  max-width: 62ch;
+}
+.hero ol.hero-requirements {
+  margin: -0.2rem 0 0;
+  padding-left: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.hero ol.hero-requirements li::marker {
+  color: var(--accent);
+  font-weight: 600;
 }
 .hero strong {
   color: var(--accent);

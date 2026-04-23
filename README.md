@@ -2,9 +2,21 @@
 
 **[Try it →](https://voltrevo.github.io/webrtc-direct-demo/#demo)**
 
-A browser-to-server demo for **libp2p's WebRTC Direct transport**:
-connects to a server without any permission from a domain registrar or
-certificate authority.
+## Connection Freedom in the Browser
+
+Browser vendors migrated the web from http to https in the mid-2010s.
+That 's' stands for secure, and rightly so — plain http is
+unencrypted, and that's not ok.
+
+However, https doesn't just add encryption. It also adds:
+
+1. You must use a domain controlled by a domain registrar.
+2. You must present a certificate signed by a certificate authority.
+
+WebRTC Direct restores the freedom to talk to cryptographic
+identities instead of just those with authority-controlled names.
+
+## The workaround
 
 - WebRTC is designed for p2p communication. The two ends can be
   browsers, so it can't require one side to have a domain and signed

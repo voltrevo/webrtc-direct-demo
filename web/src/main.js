@@ -1270,6 +1270,7 @@ function showApp() {
   landingView.hidden = true
   appView.hidden = false
   statusEl.hidden = false
+  tryItBtn.hidden = true
   titleEl.classList.add('clickable')
   addrInput.focus()
   renderRoster()
@@ -1285,6 +1286,7 @@ async function showLanding() {
   appView.hidden = true
   landingView.hidden = false
   statusEl.hidden = true
+  tryItBtn.hidden = false
   titleEl.classList.remove('clickable')
   setStatus('', 'idle')
   if (window.location.hash === '#demo') {
